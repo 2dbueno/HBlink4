@@ -2089,9 +2089,21 @@ class HBProtocol(asyncio.DatagramProtocol):
                     # Allow by falling through to create new stream
                 # Different user - check if same talkgroup
                 elif current_stream.dst_id == dst_id:
-                    LOGGER.info(f'Different user joining conversation on repeater {rid_to_int(repeater.repeater_id)} '
-                               f'{new_ts_tg} during hang time: '
-                               f'old_src={bytes_to_int(current_stream.rf_src)} new_src={bytes_to_int(rf_src)}')
+                    # If the prior stream on this slot was an assumed TX relay,
+                    # this is a normal back-and-forth handoff and the old_src
+                    # reflects the relayed speaker, not a local slot anomaly.
+                    if current_stream.is_assumed:
+                        LOGGER.debug(
+                            f'Hang-time handoff on repeater {rid_to_int(repeater.repeater_id)} '
+                            f'{new_ts_tg}: prior assumed relay src={bytes_to_int(current_stream.rf_src)} '
+                            f'new local src={bytes_to_int(rf_src)}'
+                        )
+                    else:
+                        LOGGER.info(
+                            f'Different user joining conversation on repeater {rid_to_int(repeater.repeater_id)} '
+                            f'{new_ts_tg} during hang time: '
+                            f'old_src={bytes_to_int(current_stream.rf_src)} new_src={bytes_to_int(rf_src)}'
+                        )
                     # Allow by falling through to create new stream
                 else:
                     # Different user AND different talkgroup = hijacking attempt
