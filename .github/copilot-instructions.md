@@ -54,10 +54,10 @@ pip install -r requirements.txt
 pip install -r requirements-dashboard.txt
 
 # Run server only
-python run.py [config/config.json]
+python hblink4/hblink.py [config/config.json]
 
-# Run dashboard only  
-python run_dashboard.py [host] [port]
+# Run dashboard only (bind/port from the 'web' section of dashboard/config.json)
+python dashboard/server.py [bind] [port]
 
 # Run both (production-like)
 ./run_all.sh
@@ -106,7 +106,7 @@ target_repeater = user_cache.lookup_user(target_id)
 
 - **Core logic**: `hblink4/` package with protocol handling
 - **Configuration**: `config/config.json` (server), `dashboard/config.json` (web)
-- **Scripts**: `run.py`, `run_dashboard.py`, `run_all.sh`
+- **Entry points**: `hblink4/hblink.py` (server), `dashboard/server.py` (dashboard), `run_all.sh` (both, for development)
 - **Deployment**: Systemd services expect user ownership, virtual environment
 - **Data**: `logs/`, `dashboard/data/` for persistence
 - **Tests**: `tests/` with pytest, focus on access control and stream tracking

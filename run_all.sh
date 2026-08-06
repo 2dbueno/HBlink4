@@ -43,8 +43,8 @@ echo -e "${GREEN}Starting HBlink4 services...${NC}"
 echo
 
 # Start dashboard in background
-echo -e "${BLUE}Starting Dashboard on http://0.0.0.0:8080${NC}"
-python3 run_dashboard.py 0.0.0.0 8080 &
+echo -e "${BLUE}Starting Dashboard (bind/port from dashboard/config.json)...${NC}"
+python3 dashboard/server.py &
 DASHBOARD_PID=$!
 
 # Give dashboard time to start
@@ -52,13 +52,13 @@ sleep 2
 
 # Start HBlink4 server
 echo -e "${BLUE}Starting HBlink4 server...${NC}"
-python3 run.py &
+python3 hblink4/hblink.py config/config.json &
 HBLINK_PID=$!
 
 echo
 echo -e "${GREEN}Services started:${NC}"
-echo -e "  Dashboard: http://localhost:8080 (PID: $DASHBOARD_PID)"
-echo -e "  HBlink4:   UDP port 54000 (PID: $HBLINK_PID)"
+echo -e "  Dashboard: see 'web' section of dashboard/config.json (PID: $DASHBOARD_PID)"
+echo -e "  HBlink4:   see 'global' bind/port in config/config.json (PID: $HBLINK_PID)"
 echo
 echo -e "${YELLOW}Press CTRL+C to stop all services${NC}"
 echo

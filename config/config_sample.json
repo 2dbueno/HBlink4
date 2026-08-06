@@ -41,6 +41,7 @@
         ]
     },
     "dashboard": {
+        "_comment": "OUTBOUND connection to the dashboard. HBlink4 is the client here: it dials the dashboard and pushes events to it. Naming convention: host_* = an address we connect out to, bind_* = an address we listen on (see bind_ipv4/bind_ipv6 under 'global'). host_ipv4/host_ipv6 are the dashboard's reachable address - NOT bind addresses, so never 0.0.0.0 or ::. The dashboard's matching listening socket is dashboard/config.json -> event_receiver.",
         "enabled": true,
         "disable_ipv6": false,
         "transport": "unix",

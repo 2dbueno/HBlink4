@@ -10,7 +10,7 @@ import csv
 import socket
 import os
 import ipaddress
-import signal
+import sys
 import atexit
 from datetime import datetime, date, timedelta
 from collections import deque
@@ -45,13 +45,19 @@ def load_config() -> dict:
         "dashboard_title": "HBlink4 Dashboard",
         "refresh_interval": 1000,
         "max_events": 50,
+        "web": {
+            "bind": "0.0.0.0",
+            "port": 8080
+        },
+        # Addresses we LISTEN on for hblink4's incoming event connection.
+        # bind_* = we listen here (host_* would mean we dial out, which we never do).
         "event_receiver": {
             "transport": "unix",
-            "host": "127.0.0.1",
+            "bind_ipv4": "127.0.0.1",
+            "bind_ipv6": "::1",
             "port": 8765,
             "unix_socket": "/tmp/hblink4.sock",
-            "ipv6": False,
-            "buffer_size": 65536
+            "disable_ipv6": False
         },
         "user_database": {
             "enabled": True,
@@ -543,24 +549,28 @@ class UnixProtocol(asyncio.Protocol):
 
 
 class EventReceiver:
-    """Receives events from hblink4 via TCP or Unix socket"""
+    """Receives events from hblink4 via TCP or Unix socket.
+
+    This side listens; hblink4 (hblink4/events.py EventEmitter) initiates the
+    connection and sends the events. The addresses below are bind addresses.
+    """
     
-    def __init__(self, transport='unix', host_ipv4='127.0.0.1', host_ipv6='::1',
+    def __init__(self, transport='unix', bind_ipv4='127.0.0.1', bind_ipv6='::1',
                  port=8765, unix_socket='/tmp/hblink4.sock', disable_ipv6=False):
         """
         Initialize event receiver with transport abstraction
-        
+
         Args:
             transport: 'tcp' or 'unix'
-            host_ipv4: Listen address for IPv4 (for TCP)
-            host_ipv6: Listen address for IPv6 (for TCP)
-            port: Listen port (for TCP)
-            unix_socket: Unix socket path (for Unix transport)
+            bind_ipv4: Address to bind the IPv4 listener to (for TCP)
+            bind_ipv6: Address to bind the IPv6 listener to (for TCP)
+            port: Port to listen on (for TCP)
+            unix_socket: Path of the Unix socket to create and listen on
             disable_ipv6: Disable IPv6 (for networks with broken IPv6)
         """
         self.transport = transport.lower()
-        self.host_ipv4 = host_ipv4
-        self.host_ipv6 = host_ipv6 if not disable_ipv6 else None
+        self.bind_ipv4 = bind_ipv4
+        self.bind_ipv6 = bind_ipv6 if not disable_ipv6 else None
         self.disable_ipv6 = disable_ipv6
         
         if disable_ipv6 and transport == 'tcp':
@@ -585,26 +595,26 @@ class EventReceiver:
     async def _start_tcp(self, loop):
         """Start TCP server on both IPv4 and IPv6"""
         # Start IPv4 listener
-        if self.host_ipv4:
+        if self.bind_ipv4:
             try:
                 self.server = await loop.create_server(
                     lambda: TCPProtocol(self.process_event),
-                    self.host_ipv4, self.port,
+                    self.bind_ipv4, self.port,
                     family=socket.AF_INET
                 )
-                logger.info(f"✓ Listening for HBlink4 events via TCP on {self.host_ipv4}:{self.port} (IPv4)")
+                logger.info(f"✓ Listening for HBlink4 events via TCP on {self.bind_ipv4}:{self.port} (IPv4)")
             except Exception as e:
                 logger.error(f"✗ Failed to start IPv4 TCP listener: {e}")
         
         # Start IPv6 listener
-        if self.host_ipv6:
+        if self.bind_ipv6:
             try:
                 self.server_v6 = await loop.create_server(
                     lambda: TCPProtocol(self.process_event),
-                    self.host_ipv6, self.port,
+                    self.bind_ipv6, self.port,
                     family=socket.AF_INET6
                 )
-                logger.info(f"✓ Listening for HBlink4 events via TCP on [{self.host_ipv6}]:{self.port} (IPv6)")
+                logger.info(f"✓ Listening for HBlink4 events via TCP on [{self.bind_ipv6}]:{self.port} (IPv6)")
             except Exception as e:
                 logger.error(f"✗ Failed to start IPv6 TCP listener: {e}")
     
@@ -1169,10 +1179,27 @@ if static_path.exists():
 async def startup_event():
     """Start event receiver on startup"""
     receiver_config = dashboard_config.get('event_receiver', {})
+
+    # These are bind addresses -- hblink4 connects in to us. They were once named
+    # host_ipv4/host_ipv6, which collided with the connect-target keys of the same
+    # name in hblink4's own config. Accept the old names so existing installs keep
+    # working, but the current convention is bind_* for listening, host_* for
+    # connecting out.
+    def _bind_addr(new_key, old_key, default):
+        if new_key in receiver_config:
+            return receiver_config[new_key]
+        if old_key in receiver_config:
+            logger.warning(
+                f"⚠️  event_receiver.{old_key} is deprecated -- rename it to "
+                f"{new_key} (it is a bind address, not a connect target)"
+            )
+            return receiver_config[old_key]
+        return default
+
     receiver = EventReceiver(
         transport=receiver_config.get('transport', 'unix'),
-        host_ipv4=receiver_config.get('host_ipv4', '127.0.0.1'),
-        host_ipv6=receiver_config.get('host_ipv6', '::1'),
+        bind_ipv4=_bind_addr('bind_ipv4', 'host_ipv4', '127.0.0.1'),
+        bind_ipv6=_bind_addr('bind_ipv6', 'host_ipv6', '::1'),
         port=receiver_config.get('port', 8765),
         unix_socket=receiver_config.get('unix_socket', '/tmp/hblink4.sock'),
         disable_ipv6=receiver_config.get('disable_ipv6', False)
@@ -1318,7 +1345,7 @@ async def send_stats_update():
 # ========== GRACEFUL SHUTDOWN HANDLING ==========
 
 def save_persistent_data():
-    """Save all persistent data on shutdown - called by signal handlers and atexit"""
+    """Save all persistent data on shutdown - called by shutdown_event and atexit"""
     try:
         if state._persistence_disabled:
             logger.info("💾 Dashboard shutdown complete (persistence was disabled)")
@@ -1330,31 +1357,36 @@ def save_persistent_data():
         logger.error(f"❌ Failed to save data on shutdown: {e}")
         logger.info("💾 Dashboard shutdown complete (with save errors)")
 
-def signal_handler(signum, frame):
-    """Handle shutdown signals gracefully"""
-    logger.info(f"📡 Received signal {signum}, shutting down...")
-    # Just save and exit - let systemd/uvicorn handle the rest
-    save_persistent_data()
-    import sys
-    sys.exit(0)
-
-# Register shutdown handler
-# Note: When running under systemd, don't override signal handlers
-# Let uvicorn handle SIGTERM gracefully, which will trigger shutdown_event
-if __name__ == "__main__":
-    # Only register signal handlers when running directly (not via systemd/uvicorn service)
-    signal.signal(signal.SIGTERM, signal_handler)
-    signal.signal(signal.SIGINT, signal_handler)
-
+# SIGTERM/SIGINT are left to uvicorn, which shuts the server down gracefully and
+# triggers shutdown_event() above -- that is what saves the data. Installing our
+# own handlers here would pre-empt that and exit mid-request.
 atexit.register(save_persistent_data)  # Fallback for emergency exit
 
 
 if __name__ == "__main__":
+    # Direct entry point: python /path/to/dashboard/server.py [bind] [port]
+    # Bind address and port come from the 'web' section of config.json; the
+    # optional CLI arguments override it for one-off/development runs.
+    #
+    # The app object is passed in rather than the "dashboard.server:app" import
+    # string so this file is not executed a second time under a different module
+    # name -- two copies would mean two DashboardState objects and two atexit
+    # saves, the later one clobbering the real data.
     import uvicorn
+
+    web_config = dashboard_config.get('web', {})
+    host = sys.argv[1] if len(sys.argv) > 1 else web_config.get('bind', '0.0.0.0')
+    port = int(sys.argv[2]) if len(sys.argv) > 2 else int(web_config.get('port', 8080))
+
+    print(f"Starting HBlink4 Dashboard on http://{host}:{port}")
+    print("Press CTRL+C to stop")
+    print()
+
     uvicorn.run(
-        "dashboard.server:app",
-        host="0.0.0.0",
-        port=8080,
+        app,
+        host=host,
+        port=port,
         log_level="info",
-        access_log=False  # Disable access logging (reduces log clutter)
+        access_log=False,  # Disable access logging (reduces log clutter)
+        loop="asyncio"     # Disable uvloop - it breaks Unix socket connections
     )

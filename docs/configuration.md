@@ -104,7 +104,16 @@ If you see an error like "address already in use" when binding IPv6 with the sam
 
 ## Dashboard Configuration
 
-The `dashboard` section is a **top-level** configuration (not nested under `global`) and controls the real-time monitoring dashboard and event communication:
+**Who connects to whom:** the dashboard **listens**, HBlink4 **connects out to it** and pushes events. HBlink4 is the client on this link; it retries every 10 seconds until the dashboard answers. The dashboard may send a `sync_request` back over that same connection, which HBlink4 answers with a full state dump — but it never dials HBlink4.
+
+**Naming convention:** throughout HBlink4's configuration files,
+
+| Prefix | Meaning | Wildcards |
+|--------|---------|-----------|
+| `bind_*` / `bind` | an address **we listen on** | `0.0.0.0`, `::`, or `""` to disable that family |
+| `host_*` | an address **we connect out to** | never a wildcard — it must be reachable |
+
+The `dashboard` section is a **top-level** configuration (not nested under `global`) and tells HBlink4 **where to find the dashboard**. The dashboard's own listening addresses live in its `event_receiver` section (see [Dashboard-Side Configuration](#dashboard-side-configuration) below).
 
 ```json
 {
@@ -126,10 +135,10 @@ The `dashboard` section is a **top-level** configuration (not nested under `glob
 | `enabled` | boolean | Enable/disable dashboard event emitting |
 | `disable_ipv6` | boolean | Disable IPv6 for dashboard (independent of global setting) |
 | `transport` | string | Transport type: `"unix"` or `"tcp"` (see below) |
-| `host_ipv4` | string | IPv4 address for TCP transport (e.g., "127.0.0.1") |
-| `host_ipv6` | string | IPv6 address for TCP transport (e.g., "::1") |
-| `port` | number | Port number for TCP transport (default: 8765) |
-| `unix_socket` | string | Unix socket path for Unix transport (default: "/tmp/hblink4.sock") |
+| `host_ipv4` | string | IPv4 address of the dashboard to connect to (e.g., "127.0.0.1"). Not a bind address — wildcards like "0.0.0.0" are invalid here |
+| `host_ipv6` | string | IPv6 address of the dashboard to connect to (e.g., "::1"). Not a bind address — wildcards like "::" are invalid here |
+| `port` | number | Port the dashboard is listening on (default: 8765) |
+| `unix_socket` | string | Path of the Unix socket the dashboard created (default: "/tmp/hblink4.sock") |
 | `buffer_size` | number | Socket send buffer size (default: 65536) |
 
 ### Transport Options
@@ -140,43 +149,36 @@ The `dashboard` section is a **top-level** configuration (not nested under `glob
 - ✅ Automatic cleanup on startup
 - ✅ File permissions control access
 - **Use when**: Dashboard runs on same server as HBlink4
-- **Configuration**: Only `unix_socket` path is used (host and port fields ignored)
+- **Configuration**: Only `unix_socket` path is used (host and port fields ignored). The dashboard creates the socket file; HBlink4 connects to it, so both sides must name the same path
 
 **TCP (`"tcp"`)** - Required for remote dashboard:
 - ✅ Remote dashboard capability
 - ✅ Dual-stack IPv4/IPv6 support
 - ⚠️ Network exposed (use firewall rules)
 - **Use when**: Dashboard runs on different server
-- **Configuration**: Uses `host_ipv4`, `host_ipv6`, and `port` (unix_socket field ignored)
+- **Configuration**: Uses `host_ipv4`, `host_ipv6`, and `port` (unix_socket field ignored) — these are the **dashboard's** reachable address and port
 - **IPv6 detection**: Automatic based on address format
 
 **TCP Dual-Stack Configuration:**
 
-When using TCP transport with HBlink4 and dashboard on **different machines**, you have the same dual-stack options as the main UDP server:
+HBlink4's event emitter tries `host_ipv6` first and falls back to `host_ipv4`, so list whichever addresses reach the dashboard. Wildcard/bind addresses (`"0.0.0.0"`, `"::"`) belong in the dashboard's `event_receiver` section, never here:
 
 ```json
-// Localhost (both on same machine) - NO dual-stack issues
+// Dashboard on the same machine
 "host_ipv4": "127.0.0.1",
 "host_ipv6": "::1",
 "port": 8765,
 
-// Remote, dual-stack mode (RECOMMENDED for remote dashboard)
-"host_ipv4": "",              // Empty = disable IPv4 listener
-"host_ipv6": "::",            // Listen on all IPv6 interfaces
-"port": 8765,                 // Single port handles both IPv4 and IPv6
+// Dashboard on another machine, dual-stack
+"host_ipv4": "192.168.1.100",
+"host_ipv6": "2001:db8::100",
+"port": 8765,
 
-// Remote, separate ports (if dual-stack conflicts)
-"host_ipv4": "0.0.0.0",
-"host_ipv6": "::",
-"port": 8765,                 // Note: May need different ports if bind error
-
-// Remote, IPv4-only (simplest)
+// Dashboard on another machine, IPv4 only
 "disable_ipv6": true,
-"host_ipv4": "0.0.0.0",
+"host_ipv4": "192.168.1.100",
 "port": 8765,
 ```
-
-**Note**: HBlink4's event emitter tries IPv6 first, then falls back to IPv4 automatically, so dual-stack configuration on the dashboard side works seamlessly.
 
 ### Dashboard Configuration Examples
 
@@ -222,7 +224,38 @@ When using TCP transport with HBlink4 and dashboard on **different machines**, y
 }
 ```
 
-**Important**: Both HBlink4 config (`config/config.json`) and dashboard config (`dashboard/config.json`) must use the **same transport type and connection details**. See [Dashboard Documentation](../dashboard/README.md) for dashboard-side configuration.
+### Dashboard-Side Configuration
+
+The dashboard listens on two separate things, configured in `dashboard/config.json`.
+
+The `web` section is the **browser-facing web UI**:
+
+```json
+"web": {
+    "bind": "0.0.0.0",   // All IPv4 interfaces ("::" for dual-stack, "127.0.0.1" for local only)
+    "port": 8080
+}
+```
+
+`python3 dashboard/server.py [bind] [port]` overrides these for one-off runs; with no arguments the config values are used.
+
+The `event_receiver` section is the **listening socket for the link from HBlink4**:
+
+```json
+"event_receiver": {
+    "transport": "tcp",
+    "bind_ipv4": "0.0.0.0",   // Listen on all IPv4 interfaces ("" disables the IPv4 listener)
+    "bind_ipv6": "::",        // Listen on all IPv6 interfaces
+    "port": 8765,
+    "unix_socket": "/tmp/hblink4.sock"
+}
+```
+
+**Important**: `transport`, `port`, and `unix_socket` must match on both sides. The address fields do **not** mirror each other — the dashboard binds (`bind_*`), HBlink4 dials (`host_*`). A dashboard bound to `0.0.0.0` is reached by an HBlink4 configured with the dashboard's actual IP.
+
+> **Renamed**: these two keys were previously `host_ipv4`/`host_ipv6`, which collided with the identically-named connect-target keys in HBlink4's own `dashboard` section. The old names are still accepted, with a warning logged at startup.
+
+See [Dashboard Documentation](../dashboard/README.md) for the rest of the dashboard-side configuration.
 
 ## Connection Type Detection
 

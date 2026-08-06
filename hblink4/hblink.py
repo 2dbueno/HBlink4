@@ -4342,13 +4342,21 @@ async def async_main():
 
 def main():
     """Main program entry point"""
-    if len(sys.argv) < 2:
-        print('Usage: run.py [config/config.json]')
-        print('Note: If no config file specified, config/config.json will be used')
-        print('      Copy config_sample.json to config.json and edit as needed')
-        sys.exit(1)
+    if len(sys.argv) > 1:
+        config_path = sys.argv[1]
+    else:
+        # Default to config/config.json alongside the package directory
+        config_path = os.path.join(
+            os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+            'config', 'config.json'
+        )
+        if not os.path.isfile(config_path):
+            print('Usage: hblink.py [config/config.json]')
+            print(f'Note: No config file given and none found at {config_path}')
+            print('      Copy config_sample.json to config.json and edit as needed')
+            sys.exit(1)
 
-    load_config(sys.argv[1])
+    load_config(config_path)
     # Setup logging using the imported function
     global LOGGER
     LOGGER = setup_logging(CONFIG, __name__)

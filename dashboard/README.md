@@ -20,11 +20,13 @@ Real-time monitoring dashboard for HBlink4 DMR server with modern look and feel.
 
 ## Configuration
 
-The dashboard uses two configuration files:
-- **HBlink4 config** (`config/config.json`) - Controls event sending
-- **Dashboard config** (`dashboard/config.json`) - Controls dashboard behavior and event receiving
+The dashboard **listens**; HBlink4 **connects out to it** and sends the events.
 
-Both configs must use the same transport settings (Unix socket for local, TCP for remote).
+Two configuration files:
+- **HBlink4 config** (`config/config.json`, `dashboard` section) - the dashboard address HBlink4 connects to
+- **Dashboard config** (`dashboard/config.json`, `event_receiver` section) - the addresses the dashboard binds and listens on, plus dashboard behavior
+
+Both configs must use the same transport, port, and socket path (Unix socket for local, TCP for remote). The address fields are not mirrors of each other: one is a connect target, the other a bind address.
 
 For complete configuration details, see the [Configuration Guide](../docs/configuration.md#dashboard-configuration).
 "port": 8765
@@ -81,7 +83,7 @@ The button appears as the first item in the header status area with a light blue
 
 ## Usage
 
-The dashboard is started automatically with `./run_all.sh` or can be started separately with `python3 run_dashboard.py`. Access at http://localhost:8080 (or your server IP for remote access).
+The dashboard is started automatically with `./run_all.sh`, or separately with `python3 dashboard/server.py` from the repository root. It binds the address and port from the `web` section of `dashboard/config.json` (default `0.0.0.0:8080`); passing `[bind] [port]` on the command line overrides that for one-off runs. Access at http://localhost:8080 (or your server IP for remote access).
 
 ## Dashboard Components
 

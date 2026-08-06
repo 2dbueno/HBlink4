@@ -13,14 +13,19 @@
     },
     "refresh_interval": 1000,
     "max_events": 50,
+    "web": {
+        "_comment": "LISTENING socket for browsers (the web UI). Unrelated to the HBlink4 event link below. 'bind' is a bind address: '0.0.0.0' for all IPv4 interfaces, '::' for all interfaces on a dual-stack host, '127.0.0.1' for local access only.",
+        "bind": "0.0.0.0",
+        "port": 8080
+    },
     "event_receiver": {
+        "_comment": "LISTENING socket for HBlink4's incoming event connection. HBlink4 dials in and sends the events; the dashboard only sends sync_request back over the connection it accepted. Naming convention: bind_* = an address we listen on, host_* = an address we connect out to. bind_ipv4/bind_ipv6 accept '0.0.0.0'/'::' for all interfaces, or '' to disable that family. transport, port and unix_socket must match the 'dashboard' section of config/config.json.",
         "disable_ipv6": false,
         "transport": "unix",
-        "host_ipv4": "127.0.0.1",
-        "host_ipv6": "::1",
+        "bind_ipv4": "127.0.0.1",
+        "bind_ipv6": "::1",
         "port": 8765,
-        "unix_socket": "/tmp/hblink4.sock",
-        "buffer_size": 65536
+        "unix_socket": "/tmp/hblink4.sock"
     },
     "user_database": {
         "enabled": true,

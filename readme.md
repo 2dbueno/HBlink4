@@ -77,10 +77,12 @@ For production deployments with automatic startup, see [SYSTEMD.md](SYSTEMD.md).
 # Start all services together
 ./run_all.sh
 
-# Or start services separately:
-python3 run.py              # HBlink4 server
-python3 run_dashboard.py    # Web dashboard (in another terminal)
+# Or start services separately (from the repository root):
+python3 hblink4/hblink.py config/config.json   # HBlink4 server
+python3 dashboard/server.py                    # Web dashboard (in another terminal)
 ```
+
+Both read their configuration from disk: the server's config path defaults to `config/config.json`, and the dashboard takes its bind address and port from the `web` section of `dashboard/config.json`. Each can be overridden on the command line — `hblink.py <config>` and `server.py [bind] [port]` — for one-off runs.
 
 Access the dashboard at http://localhost:8080. See [Dashboard Documentation](dashboard/README.md) for features and configuration.
 

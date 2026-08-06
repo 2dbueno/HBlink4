@@ -2,6 +2,11 @@
 Event emitter for dashboard with transport abstraction
 Supports TCP (remote) and Unix socket (local)
 
+This side is the CLIENT: the dashboard (dashboard/server.py EventReceiver)
+listens, and this emitter connects out to it and sends the events. The only
+traffic in the other direction is the dashboard's sync_request, answered here
+by the reconnect callback.
+
 Performance: TCP ~5-15μs, Unix socket ~0.5-1μs
 Dashboard connection state tracked for both transports
 """
@@ -51,10 +56,10 @@ class EventEmitter:
         Args:
             enabled: Whether to emit events (False = zero overhead)
             transport: 'tcp' or 'unix'
-            host_ipv4: Dashboard host IPv4 address (for TCP)
-            host_ipv6: Dashboard host IPv6 address (for TCP)
-            port: Dashboard port (for TCP)
-            unix_socket: Unix socket path (for Unix transport)
+            host_ipv4: Dashboard IPv4 address to connect to (for TCP)
+            host_ipv6: Dashboard IPv6 address to connect to (for TCP)
+            port: Dashboard listen port to connect to (for TCP)
+            unix_socket: Path of the Unix socket the dashboard listens on
             disable_ipv6: Disable IPv6 (for networks with broken IPv6)
             buffer_size: Socket send buffer size
         """

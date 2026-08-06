@@ -7,13 +7,16 @@ Type=simple
 User=cort
 Group=cort
 WorkingDirectory=/home/cort/hblink4
-ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/run.py
+ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/hblink4/hblink.py /home/cort/hblink4/config/config.json
 Restart=always
 RestartSec=10
 
 # Security hardening
+# NOTE: do not add PrivateTmp=true here. It gives each service its own /tmp
+# namespace, so hblink4 and the dashboard would each create a private
+# /tmp/hblink4.sock and never see each other's -- silently breaking the
+# 'unix' event transport.
 NoNewPrivileges=true
-PrivateTmp=true
 
 # Logging
 StandardOutput=journal

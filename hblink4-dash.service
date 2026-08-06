@@ -7,14 +7,15 @@ Wants=hblink4.service
 Type=simple
 User=cort
 Group=cort
-WorkingDirectory=/home/cort/hblink4/dashboard
-ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/run_dashboard.py
+WorkingDirectory=/home/cort/hblink4
+ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/dashboard/server.py
 Restart=always
 RestartSec=10
 
 # Security hardening
+# NOTE: do not add PrivateTmp=true here. See the note in hblink4.service --
+# a private /tmp breaks the 'unix' event transport between the two services.
 NoNewPrivileges=true
-PrivateTmp=true
 
 # Logging
 StandardOutput=journal
