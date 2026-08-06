@@ -27,9 +27,10 @@ env/
 .env/
 .venv/
 
-# IDE
+# IDE / tooling
 .idea/
 .vscode/
+.claude/
 *.swp
 *.swo
 *~
@@ -38,10 +39,12 @@ env/
 *.log
 logs/
 
-# Configuration files
+# Configuration files (live configs are per-install; commit the *_sample.json)
 config/config.json
 config/config_bak.json
+config/obp_config.json
 dashboard/config.json
+*.bak
 
 # User database backups (script output / dashboard refresh artifacts)
 user.old*
