@@ -43,7 +43,7 @@ HBlink4 focuses on being an efficient **endpoint network server** with the follo
 
 1. Clone this repository:
 ```bash
-git clone https://github.com/yourusername/HBlink4.git
+git clone https://github.com/n0mjs710/HBlink4
 cd HBlink4
 ```
 
