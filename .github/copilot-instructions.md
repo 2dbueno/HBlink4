@@ -50,13 +50,14 @@ except ImportError:
 ```bash
 # Development setup
 python3 -m venv venv && source venv/bin/activate
-pip install -e ".[dashboard,dev]"   # editable install + console scripts
+pip install -r requirements.txt
+pip install -r requirements-dashboard.txt
 
 # Run server only
-hblink4 [config/config.json]          # console script from pip install -e .
+python run_hblink.py [config/config.json]     # or: python hblink4/hblink.py ...
 
 # Run dashboard only (bind/port from the 'web' section of dashboard/config.json)
-hblink4-dashboard [bind] [port]
+python run_dashboard.py [bind] [port]         # or: python dashboard/server.py ...
 
 # Run both (production-like)
 ./run_all.sh
@@ -105,7 +106,7 @@ target_repeater = user_cache.lookup_user(target_id)
 
 - **Core logic**: `hblink4/` package with protocol handling
 - **Configuration**: `config/config.json` (server), `dashboard/config.json` (web)
-- **Entry points**: console scripts `hblink4` -> `hblink4.hblink:main` and `hblink4-dashboard` -> `dashboard.server:run`, declared in `pyproject.toml`; `run_all.sh` runs both for development. Never run the module files by path -- it loads the package twice.
+- **Entry points**: `hblink4/hblink.py` and `dashboard/server.py` are directly runnable (what systemd uses). `run_hblink.py` / `run_dashboard.py` in the root are logic-free convenience launchers; `run_all.sh` runs both. No install step required. `pip install -e .` additionally provides `hblink4` / `hblink4-dashboard` commands.
 - **Deployment**: Systemd services expect user ownership, virtual environment
 - **Data**: `logs/`, `dashboard/data/` for persistence
 - **Tests**: `tests/` with pytest, focus on access control and stream tracking

@@ -9,24 +9,13 @@ readme = "readme.md"
 requires-python = ">=3.9"
 license = "GPL-3.0-or-later"
 authors = [{ name = "Cort Buffington, N0MJS" }]
-dynamic = ["version"]
-
-dependencies = [
-    "typing-extensions>=4.7.1",
-    "dmr_utils3>=0.1.29",
-]
-
-[project.optional-dependencies]
-# The dashboard is a separate process; install with: pip install -e ".[dashboard]"
-dashboard = [
-    "fastapi>=0.104.0",
-    "uvicorn[standard]>=0.24.0",
-    "websockets>=12.0",
-]
-dev = [
-    "pytest>=7.4.0",
-    "pytest-cov>=4.1.0",
-]
+# Installing is OPTIONAL. HBlink4 runs straight from a git checkout:
+#     pip install -r requirements.txt -r requirements-dashboard.txt
+#     python hblink.py config/config.json
+# This file exists for people who prefer `pip install -e .`, which additionally
+# provides `hblink4` / `hblink4-dashboard` commands. Dependencies are read from
+# the requirements files so there is only one place to declare them.
+dynamic = ["version", "dependencies", "optional-dependencies"]
 
 [project.urls]
 Homepage = "https://github.com/n0mjs710/HBlink4"
@@ -39,6 +28,8 @@ hblink4-dashboard = "dashboard.server:run"
 
 [tool.setuptools.dynamic]
 version = { attr = "hblink4.__version__" }
+dependencies = { file = ["requirements.txt"] }
+optional-dependencies.dashboard = { file = ["requirements-dashboard.txt"] }
 
 [tool.setuptools]
 packages = ["hblink4", "dashboard"]

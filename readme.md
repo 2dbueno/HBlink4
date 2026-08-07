@@ -53,13 +53,14 @@ python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. Install HBlink4 and its dependencies:
+3. Install requirements:
 ```bash
-pip install -e ".[dashboard]"        # add ,dev for the test suite
+pip install -r requirements.txt
+pip install -r requirements-dashboard.txt   # if you want the dashboard
 ```
 
-This installs the package in editable mode and creates two commands in the
-virtual environment: `hblink4` and `hblink4-dashboard`.
+HBlink4 runs straight from the checkout — there is no install step, and
+nothing to redo after a `git pull`.
 
 ## Configuration
 
@@ -80,14 +81,21 @@ For production deployments with automatic startup, see [SYSTEMD.md](SYSTEMD.md).
 # Start all services together
 ./run_all.sh
 
-# Or start services separately (with the venv activated):
-hblink4 config/config.json   # HBlink4 server
-hblink4-dashboard            # Web dashboard (in another terminal)
+# Or start services separately (from the repository root):
+python3 run_hblink.py config/config.json   # HBlink4 server
+python3 run_dashboard.py                   # Web dashboard (in another terminal)
 ```
 
-Both read their configuration from disk: the server's config path defaults to `config/config.json`, and the dashboard takes its bind address and port from the `web` section of `dashboard/config.json`. Each can be overridden on the command line — `hblink4 <config>` and `hblink4-dashboard [bind] [port]` — for one-off runs.
+`run_hblink.py` and `run_dashboard.py` are convenience launchers containing no
+logic. The modules they point at run just as well on their own, which is what
+the systemd units use — no venv activation needed:
 
-Run the modules by file path and Python loads the package twice under two sets of names; use these commands, or `python3 -m hblink4.hblink`.
+```bash
+/path/to/hblink4/venv/bin/python /path/to/hblink4/hblink4/hblink.py /path/to/hblink4/config/config.json
+/path/to/hblink4/venv/bin/python /path/to/hblink4/dashboard/server.py
+```
+
+Both read their configuration from disk: the server's config path defaults to `config/config.json`, and the dashboard takes its bind address and port from the `web` section of `dashboard/config.json`. Each accepts the same overrides on the command line for one-off runs.
 
 Access the dashboard at http://localhost:8080. See [Dashboard Documentation](dashboard/README.md) for features and configuration.
 

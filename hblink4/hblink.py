@@ -32,10 +32,17 @@ LOGGER = logging.getLogger(__name__)
 import os
 import sys
 
-# Package-relative imports only. There is deliberately no "except ImportError"
-# fallback to bare module names: that fallback let hblink.py be run by file path,
-# which loads this package's modules twice under two sets of names (see the note
-# in __init__.py). Run the installed console script, or python -m hblink4.hblink.
+# Allow this file to be run directly by path (python hblink4/hblink.py) as well
+# as imported. Establishing the package context up front means the relative
+# imports below resolve to hblink4.* exactly once -- the older approach of
+# falling back to bare "from constants import ..." loaded every module a second
+# time under a second name (see the note in __init__.py). Cheap: __init__.py is
+# metadata only, so importing the parent package pulls in nothing else.
+if __package__ in (None, ""):
+    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+    __package__ = "hblink4"
+    import hblink4  # noqa: F401  (parent package must be in sys.modules)
+
 from .constants import (
     RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL, DMRD,
     MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA

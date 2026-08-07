@@ -21,13 +21,16 @@ from fastapi.staticfiles import StaticFiles
 from pathlib import Path
 import logging
 
-try:
-    from .user_db import UserDatabase, compute_next_refresh_seconds, _age_str
-except ImportError:
-    # Running the dashboard directly without package install
-    import sys as _sys
-    _sys.path.insert(0, str(Path(__file__).parent))
-    from user_db import UserDatabase, compute_next_refresh_seconds, _age_str
+# Allow this file to be run directly by path (python dashboard/server.py) as
+# well as imported. Establishing the package context means user_db is imported
+# once, as dashboard.user_db, rather than a second bare copy under sys.path
+# surgery.
+if __package__ in (None, ""):
+    sys.path.insert(0, str(Path(__file__).parent.parent))
+    __package__ = "dashboard"
+    import dashboard  # noqa: F401  (parent package must be in sys.modules)
+
+from .user_db import UserDatabase, compute_next_refresh_seconds, _age_str
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)

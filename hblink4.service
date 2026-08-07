@@ -7,7 +7,7 @@ Type=simple
 User=cort
 Group=cort
 WorkingDirectory=/home/cort/hblink4
-ExecStart=/home/cort/hblink4/venv/bin/hblink4 /home/cort/hblink4/config/config.json
+ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/hblink4/hblink.py /home/cort/hblink4/config/config.json
 Restart=always
 RestartSec=10
 

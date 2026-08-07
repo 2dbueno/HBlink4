@@ -81,7 +81,7 @@ The button appears as the first item in the header status area with a light blue
 
 ## Usage
 
-The dashboard is started automatically with `./run_all.sh`, or separately with the `hblink4-dashboard` command (installed by `pip install -e ".[dashboard]"`). It binds the address and port from the `web` section of `dashboard/config.json` (default `0.0.0.0:8080`); passing `[bind] [port]` on the command line overrides that for one-off runs. Access at http://localhost:8080 (or your server IP for remote access).
+The dashboard is started automatically with `./run_all.sh`, or separately with `python3 run_dashboard.py` (or `python3 dashboard/server.py`) from the repository root. It binds the address and port from the `web` section of `dashboard/config.json` (default `0.0.0.0:8080`); passing `[bind] [port]` on the command line overrides that for one-off runs. Access at http://localhost:8080 (or your server IP for remote access).
 
 ## Dashboard Components
 
