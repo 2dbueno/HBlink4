@@ -8,7 +8,7 @@ Type=simple
 User=cort
 Group=cort
 WorkingDirectory=/home/cort/hblink4
-ExecStart=/home/cort/hblink4/venv/bin/python /home/cort/hblink4/dashboard/server.py
+ExecStart=/home/cort/hblink4/venv/bin/hblink4-dashboard
 Restart=always
 RestartSec=10
 

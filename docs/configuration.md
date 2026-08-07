@@ -237,7 +237,7 @@ The `web` section is the **browser-facing web UI**:
 }
 ```
 
-`python3 dashboard/server.py [bind] [port]` overrides these for one-off runs; with no arguments the config values are used.
+`hblink4-dashboard [bind] [port]` overrides these for one-off runs; with no arguments the config values are used.
 
 The `event_receiver` section is the **listening socket for the link from HBlink4**:
 

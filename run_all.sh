@@ -15,7 +15,7 @@ NC='\033[0m' # No Color
 
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then
-    echo -e "${YELLOW}Virtual environment not found. Please run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt${NC}"
+    echo -e "${YELLOW}Virtual environment not found. Please run: python3 -m venv venv && source venv/bin/activate && pip install -e \".[dashboard]\"${NC}"
     exit 1
 fi
 
@@ -23,10 +23,10 @@ fi
 echo -e "${BLUE}Activating virtual environment...${NC}"
 source venv/bin/activate
 
-# Check if dashboard requirements are installed
-if ! python3 -c "import fastapi" 2>/dev/null; then
-    echo -e "${YELLOW}Dashboard dependencies not found. Installing...${NC}"
-    pip install -r requirements-dashboard.txt
+# Check that the package (and its dashboard extra) is installed
+if ! command -v hblink4-dashboard >/dev/null 2>&1; then
+    echo -e "${YELLOW}HBlink4 not installed in the venv. Installing...${NC}"
+    pip install -e ".[dashboard]"
 fi
 
 # Function to cleanup on exit
@@ -44,7 +44,7 @@ echo
 
 # Start dashboard in background
 echo -e "${BLUE}Starting Dashboard (bind/port from dashboard/config.json)...${NC}"
-python3 dashboard/server.py &
+hblink4-dashboard &
 DASHBOARD_PID=$!
 
 # Give dashboard time to start
@@ -52,7 +52,7 @@ sleep 2
 
 # Start HBlink4 server
 echo -e "${BLUE}Starting HBlink4 server...${NC}"
-python3 hblink4/hblink.py config/config.json &
+hblink4 config/config.json &
 HBLINK_PID=$!
 
 echo

@@ -1363,15 +1363,17 @@ def save_persistent_data():
 atexit.register(save_persistent_data)  # Fallback for emergency exit
 
 
-if __name__ == "__main__":
-    # Direct entry point: python /path/to/dashboard/server.py [bind] [port]
-    # Bind address and port come from the 'web' section of config.json; the
-    # optional CLI arguments override it for one-off/development runs.
-    #
-    # The app object is passed in rather than the "dashboard.server:app" import
-    # string so this file is not executed a second time under a different module
-    # name -- two copies would mean two DashboardState objects and two atexit
-    # saves, the later one clobbering the real data.
+def run():
+    """Console-script entry point (hblink4-dashboard).
+
+    Bind address and port come from the 'web' section of config.json; optional
+    CLI arguments override them for one-off/development runs.
+
+    The app object is passed to uvicorn rather than the "dashboard.server:app"
+    import string so this module is not executed a second time under a different
+    name -- two copies would mean two DashboardState objects and two atexit
+    saves, the later one clobbering the real data.
+    """
     import uvicorn
 
     web_config = dashboard_config.get('web', {})
@@ -1390,3 +1392,7 @@ if __name__ == "__main__":
         access_log=False,  # Disable access logging (reduces log clutter)
         loop="asyncio"     # Disable uvloop - it breaks Unix socket connections
     )
+
+
+if __name__ == "__main__":
+    run()

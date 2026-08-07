@@ -50,14 +50,13 @@ except ImportError:
 ```bash
 # Development setup
 python3 -m venv venv && source venv/bin/activate
-pip install -r requirements.txt
-pip install -r requirements-dashboard.txt
+pip install -e ".[dashboard,dev]"   # editable install + console scripts
 
 # Run server only
-python hblink4/hblink.py [config/config.json]
+hblink4 [config/config.json]          # console script from pip install -e .
 
 # Run dashboard only (bind/port from the 'web' section of dashboard/config.json)
-python dashboard/server.py [bind] [port]
+hblink4-dashboard [bind] [port]
 
 # Run both (production-like)
 ./run_all.sh
@@ -106,7 +105,7 @@ target_repeater = user_cache.lookup_user(target_id)
 
 - **Core logic**: `hblink4/` package with protocol handling
 - **Configuration**: `config/config.json` (server), `dashboard/config.json` (web)
-- **Entry points**: `hblink4/hblink.py` (server), `dashboard/server.py` (dashboard), `run_all.sh` (both, for development)
+- **Entry points**: console scripts `hblink4` -> `hblink4.hblink:main` and `hblink4-dashboard` -> `dashboard.server:run`, declared in `pyproject.toml`; `run_all.sh` runs both for development. Never run the module files by path -- it loads the package twice.
 - **Deployment**: Systemd services expect user ownership, virtual environment
 - **Data**: `logs/`, `dashboard/data/` for persistence
 - **Tests**: `tests/` with pytest, focus on access control and stream tracking

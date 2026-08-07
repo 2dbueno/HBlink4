@@ -29,8 +29,6 @@ Two configuration files:
 Both configs must use the same transport, port, and socket path (Unix socket for local, TCP for remote). The address fields are not mirrors of each other: one is a connect target, the other a bind address.
 
 For complete configuration details, see the [Configuration Guide](../docs/configuration.md#dashboard-configuration).
-"port": 8765
-```
 
 The config file is created automatically with defaults on first run. Edit `dashboard/config.json` and restart the dashboard to apply changes.
 
@@ -83,7 +81,7 @@ The button appears as the first item in the header status area with a light blue
 
 ## Usage
 
-The dashboard is started automatically with `./run_all.sh`, or separately with `python3 dashboard/server.py` from the repository root. It binds the address and port from the `web` section of `dashboard/config.json` (default `0.0.0.0:8080`); passing `[bind] [port]` on the command line overrides that for one-off runs. Access at http://localhost:8080 (or your server IP for remote access).
+The dashboard is started automatically with `./run_all.sh`, or separately with the `hblink4-dashboard` command (installed by `pip install -e ".[dashboard]"`). It binds the address and port from the `web` section of `dashboard/config.json` (default `0.0.0.0:8080`); passing `[bind] [port]` on the command line overrides that for one-off runs. Access at http://localhost:8080 (or your server IP for remote access).
 
 ## Dashboard Components
 

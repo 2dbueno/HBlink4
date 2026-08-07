@@ -53,10 +53,13 @@ python3 -m venv venv
 source venv/bin/activate  # On Windows: venv\Scripts\activate
 ```
 
-3. Install requirements:
+3. Install HBlink4 and its dependencies:
 ```bash
-pip install -r requirements.txt
+pip install -e ".[dashboard]"        # add ,dev for the test suite
 ```
+
+This installs the package in editable mode and creates two commands in the
+virtual environment: `hblink4` and `hblink4-dashboard`.
 
 ## Configuration
 
@@ -77,12 +80,14 @@ For production deployments with automatic startup, see [SYSTEMD.md](SYSTEMD.md).
 # Start all services together
 ./run_all.sh
 
-# Or start services separately (from the repository root):
-python3 hblink4/hblink.py config/config.json   # HBlink4 server
-python3 dashboard/server.py                    # Web dashboard (in another terminal)
+# Or start services separately (with the venv activated):
+hblink4 config/config.json   # HBlink4 server
+hblink4-dashboard            # Web dashboard (in another terminal)
 ```
 
-Both read their configuration from disk: the server's config path defaults to `config/config.json`, and the dashboard takes its bind address and port from the `web` section of `dashboard/config.json`. Each can be overridden on the command line — `hblink.py <config>` and `server.py [bind] [port]` — for one-off runs.
+Both read their configuration from disk: the server's config path defaults to `config/config.json`, and the dashboard takes its bind address and port from the `web` section of `dashboard/config.json`. Each can be overridden on the command line — `hblink4 <config>` and `hblink4-dashboard [bind] [port]` — for one-off runs.
+
+Run the modules by file path and Python loads the package twice under two sets of names; use these commands, or `python3 -m hblink4.hblink`.
 
 Access the dashboard at http://localhost:8080. See [Dashboard Documentation](dashboard/README.md) for features and configuration.
 

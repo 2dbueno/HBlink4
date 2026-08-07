@@ -9,22 +9,30 @@ This directory contains systemd service files for running HBlink4 and its dashbo
 
 ## Upgrading an existing install
 
-**The launcher scripts `run.py` and `run_dashboard.py` have been removed.** Both
-services now execute their program directly. If you have older unit files
-installed, they still point at the deleted scripts and **will fail on the next
-restart** — update them before restarting anything.
+**The launcher scripts `run.py` and `run_dashboard.py` have been removed, and
+HBlink4 is now installed as a package with console-script entry points.** Older
+unit files point at files that no longer exist and **will fail on the next
+restart** — install the package and update the units before restarting anything.
 
 What changed in the units:
 
 | | Old | New |
 |---|---|---|
-| `hblink4` `ExecStart` | `.../run.py` | `.../hblink4/hblink.py .../config/config.json` |
-| `hblink4-dash` `ExecStart` | `.../run_dashboard.py` | `.../dashboard/server.py` (bind/port now come from `dashboard/config.json`) |
+| `hblink4` `ExecStart` | `venv/bin/python .../run.py` | `venv/bin/hblink4 /home/cort/hblink4/config/config.json` |
+| `hblink4-dash` `ExecStart` | `venv/bin/python .../run_dashboard.py` | `venv/bin/hblink4-dashboard` (bind/port from `dashboard/config.json`) |
 | `hblink4-dash` `WorkingDirectory` | `.../hblink4/dashboard` | `.../hblink4` |
 | both | `PrivateTmp=true` | *removed* — see [Security Features](#security-features) |
 
+The entry points exist because running the module files by path puts the
+package's interior on `sys.path` and loads every module twice under two sets of
+names — the dual import trap. Install first, then swap the units:
+
 ```bash
 cd /home/cort/hblink4
+source venv/bin/activate
+pip install -e ".[dashboard]"
+ls -l venv/bin/hblink4 venv/bin/hblink4-dashboard   # both should exist
+
 sudo cp hblink4.service hblink4-dash.service /etc/systemd/system/
 sudo systemctl daemon-reload
 sudo systemctl restart hblink4 hblink4-dash

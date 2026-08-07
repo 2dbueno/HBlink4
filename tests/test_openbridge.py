@@ -6,19 +6,15 @@ ingress-routing work (design item 4), once the handler has an observable effect
 beyond logging. Here we cover the pieces that are complete: config, state, and
 egress framing via the real HBProtocol._obp_build_egress.
 """
-import os
-import sys
 from hashlib import sha1
 from hmac import new as hmac_new, compare_digest
 
 import pytest
 from unittest.mock import Mock
 
-sys.path.insert(0, os.path.join(os.path.dirname(__file__), '..', 'hblink4'))
-
-import config as C
-from models import OpenBridgeConnectionConfig, OpenBridgeState, StreamState
-from hblink import HBProtocol
+from hblink4 import config as C
+from hblink4.models import OpenBridgeConnectionConfig, OpenBridgeState, StreamState
+from hblink4.hblink import HBProtocol
 
 
 def _obp(name, tgslots, enabled=True, network_id=1, lp=1, tp=1):

@@ -32,70 +32,40 @@ LOGGER = logging.getLogger(__name__)
 import os
 import sys
 
-# Try package-relative imports first, fall back to direct imports
-try:
-    from .constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL, DMRD,
-        MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA
-    )
-    from .access_control import RepeaterMatcher
-    from .events import EventEmitter
-    from .user_cache import UserCache
-    from .utils import (
-        safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
-        cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type,
-        fmt_ts_tg
-    )
-    from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func, parse_openbridge_connections as parse_openbridge_func
-    from .protocol import (
-        parse_dmr_packet, is_dmr_terminator, validate_packet_length,
-        extract_packet_command, get_call_type_name, format_id_display,
-        get_slot_name
-    )
-    from .models import (
-        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState,
-        OpenBridgeConnectionConfig, OpenBridgeState
-    )
-    from .lc import (
-        LC_OPT_GROUP_DEFAULT, LC_CARRIER_NONE, LC_CARRIER_VHEAD,
-        LC_CARRIER_VTERM, LC_CARRIER_EMB, build_lc, synth_lc_base,
-        decode_lc_from_vhead, encode_lc_forms, splice_full_lc, splice_emb_lc,
-        classify_lc_carrier,
-        STREAM_KIND_DATA, STREAM_KIND_VOICE, classify_stream_kind,
-        dtype_name, decode_data_header,
-    )
-except ImportError:
-    sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
-    from constants import (
-        RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL, DMRD,
-        MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA
-    )
-    from access_control import RepeaterMatcher
-    from events import EventEmitter
-    from user_cache import UserCache
-    from utils import (
-        safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
-        cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type,
-        fmt_ts_tg
-    )
-    from config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func, parse_openbridge_connections as parse_openbridge_func
-    from protocol import (
-        parse_dmr_packet, is_dmr_terminator, validate_packet_length,
-        extract_packet_command, get_call_type_name, format_id_display,
-        get_slot_name
-    )
-    from models import (
-        OutboundConnectionConfig, StreamState, OutboundState, RepeaterState,
-        OpenBridgeConnectionConfig, OpenBridgeState
-    )
-    from lc import (
-        LC_OPT_GROUP_DEFAULT, LC_CARRIER_NONE, LC_CARRIER_VHEAD,
-        LC_CARRIER_VTERM, LC_CARRIER_EMB, build_lc, synth_lc_base,
-        decode_lc_from_vhead, encode_lc_forms, splice_full_lc, splice_emb_lc,
-        classify_lc_carrier,
-        STREAM_KIND_DATA, STREAM_KIND_VOICE, classify_stream_kind,
-        dtype_name, decode_data_header,
-    )
+# Package-relative imports only. There is deliberately no "except ImportError"
+# fallback to bare module names: that fallback let hblink.py be run by file path,
+# which loads this package's modules twice under two sets of names (see the note
+# in __init__.py). Run the installed console script, or python -m hblink4.hblink.
+from .constants import (
+    RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL, DMRD,
+    MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA
+)
+from .access_control import RepeaterMatcher
+from .events import EventEmitter
+from .user_cache import UserCache
+from .utils import (
+    safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
+    cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type,
+    fmt_ts_tg
+)
+from .config import load_config as load_config_func, parse_outbound_connections as parse_outbound_func, parse_openbridge_connections as parse_openbridge_func
+from .protocol import (
+    parse_dmr_packet, is_dmr_terminator, validate_packet_length,
+    extract_packet_command, get_call_type_name, format_id_display,
+    get_slot_name
+)
+from .models import (
+    OutboundConnectionConfig, StreamState, OutboundState, RepeaterState,
+    OpenBridgeConnectionConfig, OpenBridgeState
+)
+from .lc import (
+    LC_OPT_GROUP_DEFAULT, LC_CARRIER_NONE, LC_CARRIER_VHEAD,
+    LC_CARRIER_VTERM, LC_CARRIER_EMB, build_lc, synth_lc_base,
+    decode_lc_from_vhead, encode_lc_forms, splice_full_lc, splice_emb_lc,
+    classify_lc_carrier,
+    STREAM_KIND_DATA, STREAM_KIND_VOICE, classify_stream_kind,
+    dtype_name, decode_data_header,
+)
 
 # Data classes moved to models.py
 

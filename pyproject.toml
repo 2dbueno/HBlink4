@@ -1,0 +1,47 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "hblink4"
+description = "Next generation HomeBrew DMR protocol server"
+readme = "readme.md"
+requires-python = ">=3.9"
+license = "GPL-3.0-or-later"
+authors = [{ name = "Cort Buffington, N0MJS" }]
+dynamic = ["version"]
+
+dependencies = [
+    "typing-extensions>=4.7.1",
+    "dmr_utils3>=0.1.29",
+]
+
+[project.optional-dependencies]
+# The dashboard is a separate process; install with: pip install -e ".[dashboard]"
+dashboard = [
+    "fastapi>=0.104.0",
+    "uvicorn[standard]>=0.24.0",
+    "websockets>=12.0",
+]
+dev = [
+    "pytest>=7.4.0",
+    "pytest-cov>=4.1.0",
+]
+
+[project.urls]
+Homepage = "https://github.com/n0mjs710/HBlink4"
+
+# Console scripts. These are what systemd should invoke -- running the module
+# files by path re-creates the dual import trap that made hblink.py load twice.
+[project.scripts]
+hblink4 = "hblink4.hblink:main"
+hblink4-dashboard = "dashboard.server:run"
+
+[tool.setuptools.dynamic]
+version = { attr = "hblink4.__version__" }
+
+[tool.setuptools]
+packages = ["hblink4", "dashboard"]
+
+[tool.setuptools.package-data]
+dashboard = ["static/*", "config_sample.json"]
