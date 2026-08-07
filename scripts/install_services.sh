@@ -8,6 +8,9 @@
 # rewrites the shipped unit files accordingly, installs them to
 # /etc/systemd/system/, and reloads systemd. Existing units are backed up first.
 #
+# The install location is taken from where this script lives, so the checkout
+# can be named anything and live anywhere -- HBlink4, hblink4, /opt/dmr/hb4.
+#
 # Set DESTDIR to install somewhere else (useful for inspecting the result
 # without touching the live system):
 #
@@ -24,6 +27,7 @@ ok()   { echo -e "${GREEN}✓ $*${NC}"; }
 warn() { echo -e "${YELLOW}⚠ $*${NC}"; }
 
 REPO_ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+VENV_PY="$REPO_ROOT/venv/bin/python"
 UNIT_DIR="${DESTDIR:-/etc/systemd/system}"
 UNITS=(hblink4.service hblink4-dash.service)
 LIVE_INSTALL=0
@@ -35,23 +39,117 @@ fi
 
 # ---------------------------------------------------------------- sanity checks
 
-for u in "${UNITS[@]}"; do
-    [ -f "$REPO_ROOT/$u" ] || die "Missing $REPO_ROOT/$u -- run this from the HBlink4 checkout."
+# The installation path ends up in ExecStart=, where systemd splits on
+# whitespace, expands $ as a variable and % as a specifier. A path containing
+# any of those produces a unit that fails at start with a misleading error, so
+# refuse up front rather than install something broken.
+case "$REPO_ROOT" in
+    *[[:space:]]*) die "The installation path contains a space:
+    $REPO_ROOT
+  systemd splits ExecStart= on whitespace, so this cannot work.
+  Move the checkout to a path with no spaces and re-run." ;;
+    *['$%']*) die "The installation path contains a '\$' or '%':
+    $REPO_ROOT
+  systemd treats those as variable/specifier escapes in a unit file.
+  Move the checkout to a path without them and re-run." ;;
+esac
+
+# A wrong or partial clone (downloaded zip of the wrong branch, cloned one
+# directory too deep) shows up here rather than as a mystery failure later.
+for f in hblink4/hblink.py dashboard/server.py "${UNITS[@]}"; do
+    [ -f "$REPO_ROOT/$f" ] || die "Missing $REPO_ROOT/$f
+  This does not look like a complete HBlink4 checkout.
+  Run the script from the checkout:  sudo ./scripts/install_services.sh"
 done
 
-[ -x "$REPO_ROOT/venv/bin/python" ] || die \
+[ -x "$VENV_PY" ] || die \
     "No virtual environment at $REPO_ROOT/venv
-  Create it first:
-    python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt"
+  Create it first, from $REPO_ROOT:
+    python3 -m venv venv
+    ./venv/bin/pip install -r requirements.txt -r requirements-dashboard.txt"
 
-[ -f "$REPO_ROOT/config/config.json" ] || warn \
-    "No config/config.json yet -- copy config/config_sample.json and edit it before starting."
+"$VENV_PY" -c 'import sys; sys.exit(0 if sys.version_info >= (3, 9) else 1)' 2>/dev/null || die \
+    "The virtual environment's Python is older than 3.9 (HBlink4 needs 3.9+).
+  Check with: $VENV_PY --version"
+
+# Missing dependencies are the most common reason a service starts and then
+# restarts forever, and the traceback only shows up in the journal. Name the
+# exact command that fixes it.
+"$VENV_PY" -c 'import dmr_utils3' 2>/dev/null || die \
+    "HBlink4's dependencies are not installed in $REPO_ROOT/venv
+  Install them:
+    ./venv/bin/pip install -r requirements.txt"
+
+DASH_READY=1
+"$VENV_PY" -c 'import fastapi, uvicorn' 2>/dev/null || DASH_READY=0
+if [ "$DASH_READY" = 0 ]; then
+    warn "The dashboard's dependencies are not installed in $REPO_ROOT/venv"
+    warn "hblink4-dash will restart in a loop until you run:"
+    warn "    ./venv/bin/pip install -r requirements-dashboard.txt"
+fi
 
 echo
 note "HBlink4 service installer"
 echo "  Install directory : $REPO_ROOT"
 echo "  Unit directory    : $UNIT_DIR"
 echo
+
+# ----------------------------------------------------------------- config files
+
+# Both programs need their config in place before the services will start.
+# Offer to create them from the samples rather than just reporting the problem.
+offer_config() {
+    local live="$1" sample="$2" label="$3"
+    [ -f "$REPO_ROOT/$live" ] && return 0
+    if [ ! -f "$REPO_ROOT/$sample" ]; then
+        warn "No $live and no $sample to copy from."
+        return 0
+    fi
+    warn "No $live yet."
+    read -r -p "  Create it from $sample? [Y/n]: " REPLY_CFG
+    case "${REPLY_CFG:-y}" in
+        [nN]|[nN][oO]) warn "  $label will not start until $live exists." ;;
+        *)
+            cp "$REPO_ROOT/$sample" "$REPO_ROOT/$live"
+            # Created under sudo, but owned by the person who has to edit it.
+            [ -n "${SUDO_USER:-}" ] && chown "$SUDO_USER" "$REPO_ROOT/$live" 2>/dev/null || true
+            ok "  created $live -- edit it before going live"
+            ;;
+    esac
+}
+
+offer_config "config/config.json"    "config/config_sample.json"    "hblink4"
+offer_config "dashboard/config.json" "dashboard/config_sample.json" "hblink4-dash"
+
+# A mismatch between the two halves of the event link is invisible at runtime:
+# the dashboard simply shows HBlink4 as disconnected, with no error either side.
+if [ -f "$REPO_ROOT/config/config.json" ] && [ -f "$REPO_ROOT/dashboard/config.json" ]; then
+    LINK_PROBLEM="$("$VENV_PY" - "$REPO_ROOT" <<'PY' 2>/dev/null || true
+import json, sys, pathlib
+root = pathlib.Path(sys.argv[1])
+try:
+    server = json.loads((root / "config" / "config.json").read_text()).get("dashboard", {})
+    dash = json.loads((root / "dashboard" / "config.json").read_text()).get("event_receiver", {})
+except Exception as e:
+    print(f"could not read both config files ({e})")
+    raise SystemExit(0)
+st, dt = server.get("transport", "unix"), dash.get("transport", "unix")
+if st != dt:
+    print(f"transport differs: config/config.json says '{st}', dashboard/config.json says '{dt}'")
+elif st == "unix":
+    ss, ds = server.get("unix_socket"), dash.get("unix_socket")
+    if ss != ds:
+        print(f"unix_socket differs: '{ss}' vs '{ds}'")
+elif server.get("port") != dash.get("port"):
+    print(f"port differs: {server.get('port')} vs {dash.get('port')}")
+PY
+)"
+    if [ -n "$LINK_PROBLEM" ]; then
+        warn "Dashboard event link mismatch -- $LINK_PROBLEM"
+        warn "The dashboard will show HBlink4 as disconnected until these agree."
+        echo
+    fi
+fi
 
 # ------------------------------------------------------------------- user/group
 
@@ -69,9 +167,11 @@ id "$SVC_USER" >/dev/null 2>&1 || die "No such user: $SVC_USER"
 getent group "$SVC_GROUP" >/dev/null 2>&1 || die "No such group: $SVC_GROUP"
 
 # The service user must be able to write persistence and logs.
-if [ "$(id -u)" -eq 0 ] && ! runuser -u "$SVC_USER" -- test -w "$REPO_ROOT" 2>/dev/null; then
-    warn "$SVC_USER cannot write to $REPO_ROOT"
-    warn "The dashboard needs write access for dashboard/data/ and logs/."
+if [ "$(id -u)" -eq 0 ] && command -v runuser >/dev/null 2>&1; then
+    if ! runuser -u "$SVC_USER" -- test -w "$REPO_ROOT" 2>/dev/null; then
+        warn "$SVC_USER cannot write to $REPO_ROOT"
+        warn "The dashboard needs write access for dashboard/data/ and logs/."
+    fi
 fi
 
 echo
@@ -79,8 +179,8 @@ note "Will install as:"
 echo "  User=$SVC_USER"
 echo "  Group=$SVC_GROUP"
 echo "  WorkingDirectory=$REPO_ROOT"
-echo "  ExecStart=$REPO_ROOT/venv/bin/python $REPO_ROOT/hblink4/hblink.py $REPO_ROOT/config/config.json"
-echo "  ExecStart=$REPO_ROOT/venv/bin/python $REPO_ROOT/dashboard/server.py"
+echo "  ExecStart=$VENV_PY $REPO_ROOT/hblink4/hblink.py $REPO_ROOT/config/config.json"
+echo "  ExecStart=$VENV_PY $REPO_ROOT/dashboard/server.py"
 echo
 read -r -p "Proceed? [y/N]: " CONFIRM
 case "$CONFIRM" in [yY]|[yY][eE][sS]) ;; *) echo "Aborted."; exit 0 ;; esac
@@ -89,6 +189,32 @@ case "$CONFIRM" in [yY]|[yY][eE][sS]) ;; *) echo "Aborted."; exit 0 ;; esac
 
 mkdir -p "$UNIT_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
+
+# '&' and '\' are substitution metacharacters on the right-hand side of s|||,
+# and would otherwise be pasted in as the matched text.
+REPO_ROOT_SED="$(printf '%s' "$REPO_ROOT" | sed -e 's/[&\\|]/\\&/g')"
+
+# Render and verify each unit in full before anything reaches the unit
+# directory, so a failed substitution can never leave a half-rewritten unit
+# behind for systemd to pick up.
+TMPDIR_UNITS="$(mktemp -d)"
+trap 'rm -rf "$TMPDIR_UNITS"' EXIT
+
+for u in "${UNITS[@]}"; do
+    # Substitute only the shipped author values; anchored so nothing else matches.
+    sed -e "s|/home/cort/hblink4|$REPO_ROOT_SED|g" \
+        -e "s|^User=cort$|User=$SVC_USER|" \
+        -e "s|^Group=cort$|Group=$SVC_GROUP|" \
+        "$REPO_ROOT/$u" > "$TMPDIR_UNITS/$u"
+
+    # Confirm the substitution produced what we intended. Checked against the
+    # chosen values with fixed-string matching -- the path is data, not a
+    # regex, and may legitimately contain '.', '[' or '+'.
+    grep -Fqx "User=$SVC_USER"              "$TMPDIR_UNITS/$u" || die "$u: User= was not set correctly"
+    grep -Fqx "Group=$SVC_GROUP"            "$TMPDIR_UNITS/$u" || die "$u: Group= was not set correctly"
+    grep -Fqx "WorkingDirectory=$REPO_ROOT" "$TMPDIR_UNITS/$u" || die "$u: WorkingDirectory= was not set correctly"
+    grep -Fq  "ExecStart=$VENV_PY "         "$TMPDIR_UNITS/$u" || die "$u: ExecStart= was not set correctly"
+done
 
 for u in "${UNITS[@]}"; do
     # Back up any existing unit into the project root rather than leaving stray
@@ -102,24 +228,9 @@ for u in "${UNITS[@]}"; do
         echo "  backed up existing $u -> $BACKUP"
     fi
 
-    # Substitute only the shipped author values; anchored so nothing else matches.
-    sed -e "s|/home/cort/hblink4|$REPO_ROOT|g" \
-        -e "s|^User=cort$|User=$SVC_USER|" \
-        -e "s|^Group=cort$|Group=$SVC_GROUP|" \
-        "$REPO_ROOT/$u" > "$UNIT_DIR/$u"
+    cp "$TMPDIR_UNITS/$u" "$UNIT_DIR/$u"
     chmod 644 "$UNIT_DIR/$u"
     ok "installed $UNIT_DIR/$u"
-done
-
-# Confirm the substitution produced what we intended, rather than leaving a
-# half-rewritten unit in place. (Checked against the chosen values, not against
-# the author's literal strings -- those are legitimate if you happen to use the
-# same username or path.)
-for u in "${UNITS[@]}"; do
-    grep -q "^User=$SVC_USER$"                 "$UNIT_DIR/$u" || die "$u: User= was not set correctly"
-    grep -q "^Group=$SVC_GROUP$"               "$UNIT_DIR/$u" || die "$u: Group= was not set correctly"
-    grep -q "^WorkingDirectory=$REPO_ROOT$"    "$UNIT_DIR/$u" || die "$u: WorkingDirectory= was not set correctly"
-    grep -q "^ExecStart=$REPO_ROOT/venv/bin/python " "$UNIT_DIR/$u" || die "$u: ExecStart= was not set correctly"
 done
 
 if [ "$LIVE_INSTALL" = 0 ]; then

@@ -15,8 +15,31 @@ NC='\033[0m' # No Color
 
 # Check if virtual environment exists
 if [ ! -d "venv" ]; then
-    echo -e "${YELLOW}Virtual environment not found. Please run: python3 -m venv venv && source venv/bin/activate && pip install -r requirements.txt${NC}"
+    echo -e "${YELLOW}Virtual environment not found. Create it first:${NC}"
+    echo -e "${YELLOW}  python3 -m venv venv${NC}"
+    echo -e "${YELLOW}  ./venv/bin/pip install -r requirements.txt -r requirements-dashboard.txt${NC}"
     exit 1
+fi
+
+# Neither program starts without its configuration, and the failure is much
+# clearer said here than as a traceback two screens further down.
+if [ ! -f "config/config.json" ]; then
+    echo -e "${YELLOW}No config/config.json yet. Create it from the sample:${NC}"
+    echo -e "${YELLOW}  cp config/config_sample.json config/config.json${NC}"
+    echo -e "${YELLOW}Then change 'passphrase' from CHANGE-ME to a password of your choosing.${NC}"
+    exit 1
+fi
+
+if grep -q '"passphrase": "CHANGE-ME"' config/config.json; then
+    echo -e "${YELLOW}config/config.json still has the placeholder passphrase CHANGE-ME.${NC}"
+    echo -e "${YELLOW}Repeaters will connect with it as-is, but anyone who has read the${NC}"
+    echo -e "${YELLOW}sample config knows it. Set a real one before going live.${NC}"
+    echo
+fi
+
+if [ ! -f "dashboard/config.json" ]; then
+    echo -e "${YELLOW}No dashboard/config.json -- creating it from the sample.${NC}"
+    cp dashboard/config_sample.json dashboard/config.json
 fi
 
 # Activate virtual environment

@@ -20,8 +20,10 @@ dynamic = ["version", "dependencies", "optional-dependencies"]
 [project.urls]
 Homepage = "https://github.com/n0mjs710/HBlink4"
 
-# Console scripts. These are what systemd should invoke -- running the module
-# files by path re-creates the dual import trap that made hblink.py load twice.
+# Console scripts, available only if you chose to `pip install` the project.
+# They are NOT how HBlink4 is normally run: the systemd units invoke the module
+# files by path straight from the checkout, so there is no install step to
+# repeat after a `git pull`. See SYSTEMD.md.
 [project.scripts]
 hblink4 = "hblink4.hblink:main"
 hblink4-dashboard = "dashboard.server:run"

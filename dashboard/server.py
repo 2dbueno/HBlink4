@@ -1212,7 +1212,10 @@ async def startup_event():
     asyncio.create_task(user_db_refresh_task())
     logger.info("🚀 HBlink4 Dashboard started!")
     logger.info(f"📡 Event transport: {receiver_config.get('transport', 'unix').upper()}")
-    logger.info("📊 Access dashboard at http://localhost:8080")
+    # Report the port actually configured, not the default -- an operator who
+    # changed it should not be sent to the wrong URL.
+    _web_cfg = dashboard_config.get('web', {}) or {}
+    logger.info(f"📊 Access dashboard at http://localhost:{_web_cfg.get('port', 8080)}")
 
     # Warn operator if they left the placeholder contact in the User-Agent.
     udb_cfg = dashboard_config.get("user_database", {}) or {}

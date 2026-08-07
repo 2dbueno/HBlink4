@@ -39,53 +39,141 @@ HBlink4 focuses on being an efficient **endpoint network server** with the follo
 
 ## Installation
 
-> **⚠️ IMPORTANT**: Clone and run HBlink4 as the same user account. The dashboard writes files for persistence across restarts and needs write access to the installation directory.
+Linux, Python 3.9 or newer. Run every step as your normal login account — **not**
+as root, and not with `sudo` except where a step says to. HBlink4 runs from the
+directory you clone it into and writes its logs and dashboard data there, so it
+has to be a directory your own account owns.
 
-1. Clone this repository:
+### 1. Install the prerequisites
+
+Debian, Ubuntu, or Raspberry Pi OS:
+
 ```bash
+sudo apt update
+sudo apt install -y git python3 python3-venv
+```
+
+Fedora, RHEL, or Rocky:
+
+```bash
+sudo dnf install -y git python3
+```
+
+### 2. Get the code
+
+```bash
+cd ~
 git clone https://github.com/n0mjs710/HBlink4
 cd HBlink4
 ```
 
-2. Create a virtual environment and activate it:
+Every remaining step is run from inside this directory.
+
+### 3. Create the virtual environment and install dependencies
+
 ```bash
 python3 -m venv venv
-source venv/bin/activate  # On Windows: venv\Scripts\activate
+./venv/bin/pip install -r requirements.txt -r requirements-dashboard.txt
 ```
 
-3. Install requirements:
+### 4. Create your configuration
+
 ```bash
-pip install -r requirements.txt
-pip install -r requirements-dashboard.txt   # if you want the dashboard
+cp config/config_sample.json config/config.json
+cp dashboard/config_sample.json dashboard/config.json
 ```
 
-HBlink4 runs straight from the checkout — there is no install step, and
-nothing to redo after a `git pull`.
+Open `config/config.json` and change `passphrase` from `CHANGE-ME` to a password
+of your choosing. That is the only edit needed to get running — every repeater
+you connect must be set to the same passphrase.
+
+```bash
+nano config/config.json
+```
+
+### 5. Try it out
+
+```bash
+./run_all.sh
+```
+
+This starts both programs in your terminal. You should see
+`✓ HBlink4 listening on 0.0.0.0:62031`. Open **http://localhost:8080** in a
+browser to see the dashboard — if you are installing on a remote machine, use
+that machine's address instead of `localhost`.
+
+Press **Ctrl+C** to stop.
+
+### 6. Open the firewall
+
+Repeaters reach HBlink4 over **UDP port 62031**, and the dashboard is served on
+**TCP port 8080**. If the machine runs a firewall, allow them:
+
+```bash
+sudo ufw allow 62031/udp
+sudo ufw allow 8080/tcp
+```
+
+Use `firewall-cmd` instead of `ufw` on Fedora/RHEL. If HBlink4 is behind a home
+router, forward UDP 62031 to this machine as well.
+
+### 7. Run it as a service
+
+So HBlink4 starts automatically at boot and restarts if it stops:
+
+```bash
+sudo ./scripts/install_services.sh
+```
+
+The script fills in your user, group, and paths, then offers to enable and start
+both services. Answer `y` to both. Check them with:
+
+```bash
+systemctl status hblink4 hblink4-dash
+```
+
+Details and manual instructions are in **[SYSTEMD.md](SYSTEMD.md)**.
+
+### Upgrading
+
+There is no install step to repeat — pull and restart:
+
+```bash
+cd ~/HBlink4
+git pull
+sudo systemctl restart hblink4 hblink4-dash
+```
+
+Your `config/config.json` and `dashboard/config.json` are never touched by
+`git pull`.
 
 ## Configuration
 
-Copy the sample configuration file and modify it for your needs:
+`config/config_sample.json` is a minimal, working starting point. To go further:
+
+- **[Configuration Guide](docs/configuration.md)** — every setting, explained
+- **`config/config_advanced_sample.json`** — a reference file showing every
+  section HBlink4 understands: blacklists, per-repeater rule patterns, links to
+  other servers, and OpenBridge trunks. Copy the pieces you need into your
+  `config/config.json`; do not use it as your config wholesale, as its example
+  ID ranges and passphrases are invented.
+- **[Connecting Repeaters](docs/connecting_to_hblink4.md)** — how to point a
+  repeater or hotspot at your new server
+
+## Running without systemd
+
 ```bash
-cp config/config_sample.json config/config.json
+./run_all.sh    # both programs in one terminal; activates the venv for you
 ```
 
-See the [Configuration Guide](docs/configuration.md) for complete documentation of all settings.
+To run them separately, activate the virtual environment first in each terminal
+— otherwise `python3` is the system interpreter and will not find the
+dependencies:
 
-## Running
-
-### Production (systemd services)
-
-See **[SYSTEMD.md](SYSTEMD.md)** — installing the unit files (a script fills in
-your user, group and paths), enabling at boot, and service management.
-
-### Development
 ```bash
-# Start all services together
-./run_all.sh
-
-# Or start services separately (from the repository root):
-python3 run_hblink.py config/config.json   # HBlink4 server
-python3 run_dashboard.py                   # Web dashboard (in another terminal)
+source venv/bin/activate
+python3 run_hblink.py config/config.json   # the server
+python3 run_dashboard.py                   # the dashboard, in another terminal
 ```
 
 `run_hblink.py` and `run_dashboard.py` are convenience launchers containing no
@@ -93,13 +181,13 @@ logic. The modules they point at run just as well on their own, which is what
 the systemd units use — no venv activation needed:
 
 ```bash
-/path/to/hblink4/venv/bin/python /path/to/hblink4/hblink4/hblink.py /path/to/hblink4/config/config.json
-/path/to/hblink4/venv/bin/python /path/to/hblink4/dashboard/server.py
+/path/to/HBlink4/venv/bin/python /path/to/HBlink4/hblink4/hblink.py /path/to/HBlink4/config/config.json
+/path/to/HBlink4/venv/bin/python /path/to/HBlink4/dashboard/server.py
 ```
 
 Both read their configuration from disk: the server's config path defaults to `config/config.json`, and the dashboard takes its bind address and port from the `web` section of `dashboard/config.json`. Each accepts the same overrides on the command line for one-off runs.
 
-Access the dashboard at http://localhost:8080. See [Dashboard Documentation](dashboard/README.md) for features and configuration.
+See [Dashboard Documentation](dashboard/README.md) for dashboard features and configuration.
 
 ## Documentation
 

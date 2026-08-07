@@ -20,11 +20,11 @@ The `global` section contains server-wide settings that control the basic operat
     "global": {
         "max_missed": 3,
         "timeout_duration": 30,
-        "disable_ipv6": false,
         "bind_ipv4": "0.0.0.0",
-        "bind_ipv6": "::",
         "port_ipv4": 62031,
-        "port_ipv6": 62031,
+        "bind_ipv6": "::",
+        "port_ipv6": 62032,
+        "disable_ipv6": true,
         "logging": {
             "file": "logs/hblink.log",
             "console_level": "INFO",
@@ -44,7 +44,7 @@ The `global` section contains server-wide settings that control the basic operat
 |---------|------|-------------|
 | `max_missed` | number | Maximum consecutive missed pings before disconnecting a repeater (default: 3) |
 | `timeout_duration` | number | Seconds between expected pings from repeaters (default: 30) |
-| `disable_ipv6` | boolean | **Disable IPv6 globally** - use only if your network has broken IPv6 routing (default: false) |
+| `disable_ipv6` | boolean | Bind IPv4 only. The shipped sample config sets this to `true`, which is what most networks want; if the setting is absent altogether the built-in default is `false` |
 | `bind_ipv4` | string | IPv4 address to bind ("0.0.0.0" for all IPv4 interfaces) |
 | `bind_ipv6` | string | IPv6 address to bind ("::" for all IPv6 interfaces) |
 | `port_ipv4` | number | UDP port for IPv4 (default: 62031) |
@@ -57,7 +57,7 @@ The `global` section contains server-wide settings that control the basic operat
 | `stream_hang_time` | float | Seconds to reserve slot for same source after stream ends (default: 10.0-20.0 seconds) |
 | `user_cache.timeout` | number | Seconds before user cache entries expire (default: 600, minimum: 60) |
 
-**Note on IPv6**: HBlink4 is dual-stack native and will bind to both IPv4 and IPv6 by default. If your network appears to support IPv6 but connections don't establish properly (a common issue with misconfigured IPv6), set `disable_ipv6: true` to force IPv4-only mode.
+**Note on IPv6**: HBlink4 is dual-stack native and supports IPv4-only, IPv6-only, and dual-stack operation. The sample config ships IPv4-only (`disable_ipv6: true`), since that is what most repeaters use and it requires no decisions to get started. To run IPv6 or dual-stack, see [Dual-Stack IPv6 Support](#dual-stack-ipv6-support) below.
 
 **User Cache**: The user cache tracks the last known repeater for each DMR ID to enable efficient private call routing. Entries are automatically cleaned up every 60 seconds. The timeout must be at least 60 seconds.
 
@@ -65,42 +65,77 @@ The `global` section contains server-wide settings that control the basic operat
 
 ### Dual-Stack IPv6 Support
 
-HBlink4 is **dual-stack native** and can listen on both IPv4 and IPv6 simultaneously:
+HBlink4 is **dual-stack native**. IPv4, IPv6, and both at once are all fully
+supported; the choice is yours and none of them is a second-class path.
 
-- Set `bind_ipv4` to `"0.0.0.0"` to listen on all IPv4 interfaces
-- Set `bind_ipv6` to `"::"` to listen on all IPv6 interfaces
-- Both can be active simultaneously for maximum compatibility
-- Specific addresses can be used instead of wildcards (e.g., `"192.168.1.10"` or `"2001:db8::1"`)
-- Use `disable_ipv6: true` to force IPv4-only mode if IPv6 is broken on your network
+The sample config ships IPv4-only (`disable_ipv6: true`) because that is what
+the overwhelming majority of repeaters and hotspots use today, and because it
+needs no decisions from a first-time operator. If you have IPv6 you intend to
+serve, enabling it is a supported, tested configuration — set
+`disable_ipv6: false` and pick one of the layouts below.
 
-**Common Issue: "Address Already in Use" on IPv6 Bind**
+**Each address family gets its own UDP socket.** That is the one mechanical
+detail worth knowing before you enable IPv6, because it determines which of the
+layouts below you want.
 
-If you see an error like "address already in use" when binding IPv6 with the same port as IPv4, your system's IPv6 stack is in dual-stack mode (IPv6 can handle both IPv4 and IPv6 on the same port). This is **normal and expected** on many Linux systems.
+- `bind_ipv4` / `port_ipv4` configure the IPv4 socket; `""` means no IPv4 socket
+- `bind_ipv6` / `port_ipv6` configure the IPv6 socket; `disable_ipv6: true` means no IPv6 socket
+- Either can use a wildcard (`"0.0.0.0"`, `"::"`) or a specific address (`"192.168.1.10"`, `"2001:db8::1"`)
 
-**Solutions:**
-1. **Use different ports** (simple): `port_ipv4: 62031`, `port_ipv6: 62032`
-2. **Disable IPv6** (IPv4-only): Set `disable_ipv6: true`
-3. **Let IPv6 handle both** (advanced): Set `bind_ipv4: ""` to disable IPv4 bind
+#### Choosing a layout
 
-**Example configurations:**
+**IPv4 only** — the shipped default.
+
 ```json
-// Dual-stack with separate ports (RECOMMENDED if you see bind errors)
-"bind_ipv4": "0.0.0.0",
-"bind_ipv6": "::",
-"port_ipv4": 62031,
-"port_ipv6": 62032,
-
-// IPv4 only (simple and reliable)
-"disable_ipv6": true,
 "bind_ipv4": "0.0.0.0",
 "port_ipv4": 62031,
-
-// Specific addresses (no port conflict)
-"bind_ipv4": "192.168.1.10",
-"bind_ipv6": "2001:db8::1",
-"port_ipv4": 62031,
-"port_ipv6": 62031
+"disable_ipv6": true
 ```
+
+**Dual-stack, separate ports** — the simplest way to add IPv6. Two independent
+sockets, no interaction between them. Repeaters connecting over IPv6 must be
+pointed at `port_ipv6`. The sample config is pre-set for this, so enabling IPv6
+is a one-key change.
+
+```json
+"bind_ipv4": "0.0.0.0",
+"port_ipv4": 62031,
+"bind_ipv6": "::",
+"port_ipv6": 62032,
+"disable_ipv6": false
+```
+
+**Dual-stack, one socket, one port** — set `bind_ipv4` to `""` so only the IPv6
+socket binds. On Linux (`net.ipv6.bindv6only=0`, the default) that socket serves
+IPv4 as well, with IPv4 peers appearing as `::ffff:` mapped addresses. Every
+repeater uses the same port regardless of family. This is also the configuration
+to use on an IPv6-only host. It requires kernel IPv6, so it fails outright on a
+host booted with `ipv6.disable=1`.
+
+```json
+"bind_ipv4": "",
+"bind_ipv6": "::",
+"port_ipv6": 62031,
+"disable_ipv6": false
+```
+
+**Dual-stack on specific addresses** — bind each family to a real address rather
+than a wildcard. The two sockets no longer overlap, so they can share a port.
+
+```json
+"bind_ipv4": "192.168.1.10",
+"port_ipv4": 62031,
+"bind_ipv6": "2001:db8::1",
+"port_ipv6": 62031,
+"disable_ipv6": false
+```
+
+#### If you see "address already in use" on the IPv6 bind
+
+You have both families on wildcards sharing one port — the IPv4 socket holds it
+and the IPv6 bind cannot also claim it. This is **normal Linux behavior**, not a
+fault in your network or in HBlink4. The server keeps running on IPv4 and logs
+the conflict along with the fix. Pick any of the three dual-stack layouts above.
 
 ## Dashboard Configuration
 
@@ -930,7 +965,16 @@ OBP edge assigns a timeslot but never renumbers the talkgroup.
 
 ## Example Configuration
 
-See `config/config_sample.json` in the repository for a complete example showing all configuration sections.
+Two sample files ship with the repository:
+
+- **`config/config_sample.json`** — a minimal, working starting point. Copy this
+  to `config/config.json` and change the passphrase; everything else has a
+  usable default.
+- **`config/config_advanced_sample.json`** — a reference showing every
+  configuration section with example values. Paste the sections you need into
+  your own config. Do not use it as your configuration directly: its blacklist
+  and repeater patterns match invented ID ranges that may overlap your own
+  repeaters, and its link and trunk examples point at hosts that do not exist.
 
 ````
 

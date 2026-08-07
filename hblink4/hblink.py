@@ -4195,7 +4195,9 @@ async def async_main():
     disable_ipv6 = CONFIG['global'].get('disable_ipv6', False)
     
     if disable_ipv6:
-        LOGGER.warning('⚠️  IPv6 is globally disabled - only binding to IPv4')
+        # Not a problem -- IPv4-only is the shipped default and what most
+        # installations want. Logged at INFO so it doesn't read as a fault.
+        LOGGER.info('IPv6 disabled by configuration - binding IPv4 only')
         bind_ipv6 = None
     
     transports = []

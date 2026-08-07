@@ -25,9 +25,21 @@ sudo ./scripts/install_services.sh
 
 It offers sensible defaults (the user who invoked `sudo`, and that user's
 primary group), backs up any units you already have into the project root as
-`<unit>.<timestamp>.bak`, checks that your venv
-exists and that the service user can write to the installation directory, and
-optionally enables and starts the services.
+`<unit>.<timestamp>.bak`, and optionally enables and starts the services.
+
+Before writing anything it checks the things that otherwise fail later, in the
+journal, where they are hard to read:
+
+- the checkout is complete, and its path contains no character systemd will
+  mis-parse in `ExecStart=` (a space, `$` or `%`)
+- `venv/` exists and its Python is 3.9 or newer
+- the server's dependencies are installed, and the dashboard's — a missing
+  `fastapi` is the usual reason `hblink4-dash` restarts in a loop
+- `config/config.json` and `dashboard/config.json` exist, offering to create
+  them from the samples if not
+- the two halves of the dashboard event link agree; if they do not, the
+  dashboard silently shows HBlink4 as disconnected
+- the service user can write to the installation directory
 
 To see what it would produce without touching the live system:
 

@@ -32,7 +32,7 @@ No operator-facing configuration change is required to migrate from v4.6.1 — t
 
 A brand-new feature: HBlink4 can now act as a repeater *to* another DMR server, in addition to accepting inbound repeaters. This is the "server-to-server link" use case.
 
-- Configured via the new `outbound_connections` block in [config_sample.json](../config/config_sample.json)
+- Configured via the new `outbound_connections` block — see [config_advanced_sample.json](../config/config_advanced_sample.json) (this block lived in `config_sample.json` at the time of this release; the samples were split later)
 - Full protocol state machine (RPTL → RPTK → RPTC → RPTO → keepalive) implemented outbound
 - Per-connection TDMA slot tracking so we don't transmit on a slot that's already busy with an incoming RX stream
 - Graceful shutdown sends `RPTCL` to each remote server
