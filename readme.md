@@ -39,7 +39,7 @@ HBlink4 focuses on being an efficient **endpoint network server** with the follo
 
 ## Installation
 
-> **⚠️ IMPORTANT**: Clone and run HBlink4 as the same user account. The systemd service files are configured to run as the user who owns the installation directory. The dashboard writes files for persistence across restarts and needs write access as well.
+> **⚠️ IMPORTANT**: Clone and run HBlink4 as the same user account. The dashboard writes files for persistence across restarts and needs write access to the installation directory.
 
 1. Clone this repository:
 ```bash
@@ -74,12 +74,9 @@ See the [Configuration Guide](docs/configuration.md) for complete documentation 
 ## Running
 
 ### Production (systemd services)
-```bash
-sudo ./scripts/install_services.sh
-```
-Asks for your service user/group, fills in your paths, installs both units and
-reloads systemd. See [SYSTEMD.md](SYSTEMD.md) for manual installation and
-service management.
+
+See **[SYSTEMD.md](SYSTEMD.md)** — installing the unit files (a script fills in
+your user, group and paths), enabling at boot, and service management.
 
 ### Development
 ```bash
