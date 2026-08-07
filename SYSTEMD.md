@@ -24,7 +24,8 @@ sudo ./scripts/install_services.sh
 ```
 
 It offers sensible defaults (the user who invoked `sudo`, and that user's
-primary group), backs up any units you already have, checks that your venv
+primary group), backs up any units you already have into the project root as
+`<unit>.<timestamp>.bak`, checks that your venv
 exists and that the service user can write to the installation directory, and
 optionally enables and starts the services.
 

@@ -91,9 +91,15 @@ mkdir -p "$UNIT_DIR"
 STAMP="$(date +%Y%m%d-%H%M%S)"
 
 for u in "${UNITS[@]}"; do
+    # Back up any existing unit into the project root rather than leaving stray
+    # files in /etc/systemd/system -- systemd reads every *.service there, and
+    # clutter in a system directory is easy to forget about. The ".bak" suffix
+    # is git-ignored.
     if [ -f "$UNIT_DIR/$u" ]; then
-        cp -p "$UNIT_DIR/$u" "$UNIT_DIR/$u.bak-$STAMP"
-        echo "  backed up existing $u -> $u.bak-$STAMP"
+        BACKUP="$REPO_ROOT/$u.$STAMP.bak"
+        cp -p "$UNIT_DIR/$u" "$BACKUP"
+        [ -n "${SUDO_USER:-}" ] && chown "$SUDO_USER" "$BACKUP" 2>/dev/null || true
+        echo "  backed up existing $u -> $BACKUP"
     fi
 
     # Substitute only the shipped author values; anchored so nothing else matches.
