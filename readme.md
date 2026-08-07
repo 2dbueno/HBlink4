@@ -74,7 +74,12 @@ See the [Configuration Guide](docs/configuration.md) for complete documentation 
 ## Running
 
 ### Production (systemd services)
-For production deployments with automatic startup, see [SYSTEMD.md](SYSTEMD.md).
+```bash
+sudo ./scripts/install_services.sh
+```
+Asks for your service user/group, fills in your paths, installs both units and
+reloads systemd. See [SYSTEMD.md](SYSTEMD.md) for manual installation and
+service management.
 
 ### Development
 ```bash

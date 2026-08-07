@@ -1,3 +1,7 @@
+# NOTE: this file ships with the author's user and install paths. Change User=,
+# Group=, WorkingDirectory= and ExecStart= below to match your system.
+# Edit the installed copy in /etc/systemd/system/, not this one, and run
+# "sudo systemctl daemon-reload" after any change. See SYSTEMD.md.
 [Unit]
 Description=HBlink4 Dashboard
 After=network.target hblink4.service

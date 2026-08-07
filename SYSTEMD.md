@@ -12,7 +12,40 @@ step, so after a `git pull` you only need to restart the services. If you are
 upgrading from a version whose units pointed at `run.py`, re-copy the unit files
 below before restarting.
 
-## Installation
+## Quick install (recommended)
+
+The shipped unit files contain the author's user and paths (`User=cort`,
+`/home/cort/hblink4`), so they will not work as-is on your system. This script
+asks for your service user and group, fills in your paths, installs both units
+and reloads systemd:
+
+```bash
+sudo ./scripts/install_services.sh
+```
+
+It offers sensible defaults (the user who invoked `sudo`, and that user's
+primary group), backs up any units you already have, checks that your venv
+exists and that the service user can write to the installation directory, and
+optionally enables and starts the services.
+
+To see what it would produce without touching the live system:
+
+```bash
+sudo DESTDIR=/tmp/preview ./scripts/install_services.sh
+```
+
+The manual steps below do the same thing by hand.
+
+## Manual installation
+
+> **⚠️ The shipped unit files contain the author's user and paths** —
+> `User=cort`, `Group=cort`, and `/home/cort/hblink4` throughout. **They will not
+> work as-is on your system.** You must change the user, the group, and every
+> path to match your installation.
+>
+> Edit the *installed* copies in `/etc/systemd/system/`, not the ones in the
+> repository — editing the repo copies makes them show up as local changes and
+> conflict on the next `git pull`.
 
 ### 1. Install the service files
 
@@ -23,15 +56,39 @@ sudo cp hblink4.service /etc/systemd/system/
 sudo cp hblink4-dash.service /etc/systemd/system/
 ```
 
-### 2. Reload systemd
+### 2. Set your user and paths
 
-Tell systemd to reload its configuration:
+Four settings in each file need to match your system: `User=`, `Group=`,
+`WorkingDirectory=`, and `ExecStart=`. Edit them with your editor of choice:
+
+```bash
+sudo nano /etc/systemd/system/hblink4.service
+sudo nano /etc/systemd/system/hblink4-dash.service
+```
+
+Or, run this from your HBlink4 directory to substitute them automatically:
+
+```bash
+sudo sed -i "s|/home/cort/hblink4|$PWD|g; s|^User=cort$|User=$USER|; s|^Group=cort$|Group=$(id -gn)|" \
+    /etc/systemd/system/hblink4.service /etc/systemd/system/hblink4-dash.service
+```
+
+Check the result before continuing — no `cort` or `/home/cort` should remain:
+
+```bash
+grep -nE "^(User|Group|WorkingDirectory|ExecStart)=" /etc/systemd/system/hblink4*.service
+```
+
+### 3. Reload systemd
+
+Tell systemd to reload its configuration. **This is required after any edit to a
+unit file** — systemd will keep using the old version until you do:
 
 ```bash
 sudo systemctl daemon-reload
 ```
 
-### 3. Enable services (optional)
+### 4. Enable services (optional)
 
 To start the services automatically at boot:
 
@@ -40,7 +97,7 @@ sudo systemctl enable hblink4
 sudo systemctl enable hblink4-dash
 ```
 
-### 4. Start the services
+### 5. Start the services
 
 ```bash
 sudo systemctl start hblink4
@@ -92,22 +149,26 @@ sudo systemctl disable hblink4-dash
 
 ## Configuration
 
-The service files are configured to:
-- Run as user `cort` in group `cort`
-- Use the Python virtual environment at `/home/cort/hblink4/venv`
+As shipped, the service files:
+- Run as user `cort` in group `cort` — **change this to your own user and group**
+- Use the Python virtual environment at `/home/cort/hblink4/venv` — **change to your path**
 - Automatically restart on failure (after 10 seconds)
 - Log to systemd journal (view with `journalctl`)
 - Start after network is available
 - Dashboard starts after and depends on HBlink4
 
-### Customization
+### Changing a unit file later
 
-If you need to modify the services (different user, paths, etc.), edit the files before copying them:
+Always edit the copy in `/etc/systemd/system/`, then reload and restart:
 
-1. Edit `hblink4.service` and/or `hblink4-dash.service`
-2. Change `User=`, `Group=`, `WorkingDirectory=`, or `ExecStart=` as needed
-3. Copy to `/etc/systemd/system/`
-4. Run `sudo systemctl daemon-reload`
+```bash
+sudo nano /etc/systemd/system/hblink4.service
+sudo systemctl daemon-reload      # required, or systemd keeps the old version
+sudo systemctl restart hblink4
+```
+
+Editing the copy in the repository has no effect on a running service, and
+leaves you with local changes that conflict on the next `git pull`.
 
 ## Security Features
 

@@ -1,5 +1,29 @@
 # HBlink4 Scripts
 
+## install_services.sh
+
+Installs the systemd unit files with your user, group and paths filled in — the
+shipped units carry the author's (`User=cort`, `/home/cort/hblink4`) and will not
+work unmodified.
+
+```bash
+sudo ./scripts/install_services.sh
+```
+
+Prompts for the service user and group (defaulting to whoever ran `sudo` and
+that user's primary group), rewrites both units, installs them to
+`/etc/systemd/system/`, runs `systemctl daemon-reload`, and optionally enables
+and starts the services. Any existing units are backed up as
+`<unit>.bak-<timestamp>` first.
+
+Preview the result without touching the live system:
+
+```bash
+sudo DESTDIR=/tmp/preview ./scripts/install_services.sh
+```
+
+See [SYSTEMD.md](../SYSTEMD.md) for manual installation and service management.
+
 ## filter_user_csv.py
 
 Filters the DMR user database to only include US and Canada entries, reducing file size and memory usage.
