@@ -6,208 +6,183 @@ For basic installation and setup, see the main [README](../readme.md).
 
 ## Overview
 
-HBlink4 is designed to be modular, allowing you to access repeater metadata, connection states, and control the routing of DMR traffic. The main interface is through the `HBProtocol` class.
+HBlink4 is modular, allowing you to access repeater metadata, connection states, and control the routing of DMR traffic. The main interface is the `HBProtocol` class, an `asyncio.DatagramProtocol`. HBlink4 runs on Python's `asyncio` event loop and has no external framework dependency.
 
 ## Core Classes
 
 ### HBProtocol
 
-The main protocol handler class that manages repeater connections and DMR traffic.
+The protocol handler that manages repeater connections and DMR traffic. One instance is bound per listening socket.
 
 ```python
 from hblink4.hblink import HBProtocol
-from twisted.internet import reactor
 
 protocol = HBProtocol()
 ```
 
 ### RepeaterState
 
-Each connected repeater is represented by a `RepeaterState` object containing metadata about the connection.
+Each inbound connection is represented by a `RepeaterState`. Despite the name it represents any inbound HomeBrew connection — repeater, hotspot, or another network's server.
 
-#### Available Properties
+#### Selected properties
 
 | Property | Type | Description |
 |----------|------|-------------|
-| `ip` | str | Repeater's IP address |
-| `port` | int | Repeater's UDP port |
-| `radio_id` | bytes | Repeater's DMR ID (4 bytes) |
-| `connection_state` | str | Current connection state ('login', 'config', 'connected') |
+| `repeater_id` | bytes | DMR ID (4 bytes) |
+| `ip` | str | Peer IP address |
+| `port` | int | Peer UDP port |
+| `connected` | bool | Connection completed |
+| `authenticated` | bool | Authentication completed |
+| `connection_state` | str | `'login'`, `'config'`, or `'connected'` |
+| `connection_type` | str | `'repeater'`, `'hotspot'`, `'network'`, or `'unknown'` |
 | `last_ping` | float | Timestamp of last ping received |
 | `ping_count` | int | Number of pings received |
-| `missed_pings` | int | Number of consecutive missed pings |
-| `description` | bytes | Repeater's description from config |
+| `missed_pings` | int | Consecutive missed pings |
+| `callsign` | bytes | Callsign from config |
+| `description` | bytes | Description from config |
 | `slots` | bytes | Supported timeslots |
-| `url` | bytes | Repeater's URL |
-| `software_id` | bytes | Repeater's software identifier |
-| `package_id` | bytes | Repeater's package identifier |
+| `url` | bytes | URL from config |
+| `software_id` | bytes | Software identifier |
+| `package_id` | bytes | Package identifier |
+| `slot1_talkgroups` | set \| None | Allowed 3-byte TGIDs on TS1; `None` = no restriction, empty set = deny all |
+| `slot2_talkgroups` | set \| None | Same for TS2 |
 
-#### Accessing Repeater States
+Metadata fields are raw protocol `bytes`, not `str`. See `hblink4/models.py` for the complete definition.
 
-The HBProtocol maintains a dictionary of all connected repeaters:
+#### Accessing repeater states
 
 ```python
-# Access repeater by ID
-repeater = protocol._repeaters[radio_id]  # radio_id is bytes
+# Access repeater by ID (keys are bytes)
+repeater = protocol._repeaters[repeater_id]
 
-# Iterate all repeaters
-for radio_id, repeater in protocol._repeaters.items():
-    print(f"Repeater {int.from_bytes(radio_id, 'big')}:")
+# Iterate all connections
+for repeater_id, repeater in protocol._repeaters.items():
+    print(f"Repeater {int.from_bytes(repeater_id, 'big')}:")
     print(f"  State: {repeater.connection_state}")
     print(f"  Address: {repeater.ip}:{repeater.port}")
 ```
 
 ## Integrating with Your Application
 
-### Complete Application Example
+### Complete application example
 
 ```python
 #!/usr/bin/env python3
-import sys
+import asyncio
 import json
-import signal
-from pathlib import Path
-from twisted.internet import reactor
+import sys
+
 from hblink4.hblink import HBProtocol, CONFIG
+
 
 class MyDMRApplication:
     def __init__(self, config_file: str):
-        # Load configuration
         self.load_config(config_file)
-        
-        # Initialize HBlink4
-        self.protocol = HBProtocol()
-        
-        # Set up signal handlers for graceful shutdown
-        signal.signal(signal.SIGINT, self.handle_shutdown)
-        signal.signal(signal.SIGTERM, self.handle_shutdown)
-        
-        # Set up UDP listeners (dual-stack)
-        # IPv4 listener
-        if CONFIG['global'].get('bind_ipv4'):
-            self.port_v4 = reactor.listenUDP(
-                CONFIG['global']['port_ipv4'],
-                self.protocol,
-                interface=CONFIG['global']['bind_ipv4']
-            )
-        
-        # IPv6 listener
-        if CONFIG['global'].get('bind_ipv6') and not CONFIG['global'].get('disable_ipv6', False):
-            self.port_v6 = reactor.listenUDP(
-                CONFIG['global']['port_ipv6'],
-                self.protocol,
-                interface=CONFIG['global']['bind_ipv6']
-            )
-        
-        # Set up periodic status check
-        reactor.callLater(60, self.check_repeater_status)
-        
+        self.transports = []
+        self.protocols = []
+
     def load_config(self, config_file: str):
         """Load the HBlink configuration file"""
         try:
             with open(config_file, 'r') as f:
-                config = json.load(f)
-                # Update the global CONFIG used by HBlink
-                CONFIG.update(config)
+                CONFIG.update(json.load(f))
         except Exception as e:
             print(f"Error loading config: {e}")
             sys.exit(1)
-    
-    def handle_shutdown(self, signum, frame):
-        """Handle shutdown signals"""
-        print("Shutting down...")
-        # Let HBlink send disconnect messages
-        self.protocol.cleanup()
-        # Stop the reactor
-        reactor.stop()
-    
-    def start(self):
-        """Start the application"""
-        bind_info = []
-        if CONFIG['global'].get('bind_ipv4'):
-            bind_info.append(f"{CONFIG['global']['bind_ipv4']}:{CONFIG['global']['port_ipv4']}")
-        if CONFIG['global'].get('bind_ipv6') and not CONFIG['global'].get('disable_ipv6', False):
-            bind_info.append(f"[{CONFIG['global']['bind_ipv6']}]:{CONFIG['global']['port_ipv6']}")
-        print(f"Starting application on {', '.join(bind_info)}")
-        # Start the Twisted reactor
-        reactor.run()
+
+    async def start(self):
+        loop = asyncio.get_running_loop()
+        g = CONFIG['global']
+
+        # Dual-stack UDP listeners. Each endpoint gets its own protocol instance.
+        if g.get('bind_ipv4'):
+            protocol = HBProtocol()
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: protocol,
+                local_addr=(g['bind_ipv4'], g.get('port_ipv4', 62031))
+            )
+            self.transports.append(transport)
+            self.protocols.append(protocol)
+
+        if g.get('bind_ipv6') and not g.get('disable_ipv6', False):
+            protocol = HBProtocol()
+            transport, _ = await loop.create_datagram_endpoint(
+                lambda: protocol,
+                local_addr=(g['bind_ipv6'], g.get('port_ipv6', 62031))
+            )
+            self.transports.append(transport)
+            self.protocols.append(protocol)
+
+        # Periodic status check alongside the protocol's own tasks
+        asyncio.create_task(self.status_loop())
+
+        # Run until cancelled (Ctrl-C raises KeyboardInterrupt in asyncio.run)
+        await asyncio.Event().wait()
+
+    async def status_loop(self):
+        while True:
+            await asyncio.sleep(60)
+            for protocol in self.protocols:
+                for repeater_id, repeater in protocol._repeaters.items():
+                    if repeater.connection_state == 'connected':
+                        self.handle_active_repeater(repeater_id, repeater)
+
+    def handle_active_repeater(self, repeater_id: bytes, repeater):
+        print(f"Active repeater {int.from_bytes(repeater_id, 'big')}:")
+        print(f"  Last ping: {repeater.last_ping}")
+        print(f"  Description: {repeater.description.decode('utf-8', errors='ignore')}")
+
+    def shutdown(self):
+        """Send disconnect messages and close sockets"""
+        for protocol in self.protocols:
+            protocol.cleanup()
+        for transport in self.transports:
+            transport.close()
+
 
 def main():
     if len(sys.argv) != 2:
         print("Usage: mydmr.py /path/to/config.json")
         sys.exit(1)
-        
+
     app = MyDMRApplication(sys.argv[1])
-    app.start()
+    try:
+        asyncio.run(app.start())
+    except KeyboardInterrupt:
+        app.shutdown()
+
 
 if __name__ == '__main__':
     main()
 ```
 
-### Basic Usage Example
+### Event hooks
 
-```python
-from twisted.internet import reactor
-from hblink4.hblink import HBProtocol, CONFIG
-
-class MyDMRApplication:
-    def __init__(self):
-        # Initialize HBlink4
-        self.protocol = HBProtocol()
-        
-        # Set up dual-stack UDP listeners
-        reactor.listenUDP(
-            CONFIG['global']['port_ipv4'],
-            self.protocol,
-            interface=CONFIG['global']['bind_ipv4']
-        )
-        
-        # Set up periodic status check
-        reactor.callLater(60, self.check_repeater_status)
-
-    def check_repeater_status(self):
-        """Example of accessing repeater information"""
-        for radio_id, repeater in self.protocol._repeaters.items():
-            if repeater.connection_state == 'yes':
-                self.handle_active_repeater(radio_id, repeater)
-        
-        # Schedule next check
-        reactor.callLater(60, self.check_repeater_status)
-
-    def handle_active_repeater(self, radio_id: bytes, repeater):
-        """Example handler for connected repeaters"""
-        repeater_id = int.from_bytes(radio_id, 'big')
-        print(f"Active repeater {repeater_id}:")
-        print(f"  Last ping: {repeater.last_ping}")
-        print(f"  Description: {repeater.description.decode('utf-8', errors='ignore')}")
-```
-
-### Event Hooks
-
-To be notified of repeater events, you can subclass HBProtocol:
+To be notified of protocol events, subclass `HBProtocol` and override the handler you need, calling `super()` so normal processing still happens. The handlers are internal (underscore-prefixed) — check the signatures in `hblink4/hblink.py` against the version you are building on, as they are not a stable public API.
 
 ```python
 class MyHBProtocol(HBProtocol):
-    def handle_repeater_connection(self, radio_id: bytes, repeater):
-        """Called when a repeater completes connection"""
-        super().handle_repeater_connection(radio_id, repeater)
-        # Your custom connection handling here
-        
-    def handle_dmr_data(self, data: bytes, addr):
-        """Called for each DMR data packet"""
-        super().handle_dmr_data(data, addr)
-        # Your custom DMR routing logic here
+    def datagram_received(self, data: bytes, addr: tuple):
+        """Every inbound packet, before dispatch"""
+        super().datagram_received(data, addr)
+
+    def _handle_config(self, data: bytes, addr):
+        """Repeater finished sending its configuration"""
+        super()._handle_config(data, addr)
+        # Custom post-connection handling here
 ```
+
+Useful override points include `datagram_received`, `_handle_repeater_login`, `_handle_config`, `_handle_options`, `_handle_ping`, and `_handle_disconnect`.
 
 ## Common Integration Tasks
 
-### Getting Connected Repeater Count
+### Getting connected repeater count
 ```python
-connected_count = sum(1 for r in protocol._repeaters.values() 
-                     if r.connection_state == 'yes')
+connected_count = sum(1 for r in protocol._repeaters.values()
+                      if r.connection_state == 'connected')
 ```
 
-### Finding a Repeater by IP
+### Finding a repeater by IP
 ```python
 def find_repeater_by_ip(protocol, ip_address: str):
     for repeater in protocol._repeaters.values():
@@ -216,45 +191,37 @@ def find_repeater_by_ip(protocol, ip_address: str):
     return None
 ```
 
-### Monitoring Connection States
+### Monitoring connection states
 ```python
 def get_repeater_states(protocol):
     states = {'connected': [], 'config': [], 'login': []}
-    for radio_id, repeater in protocol._repeaters.items():
-        states[repeater.connection_state].append(int.from_bytes(radio_id, 'big'))
+    for repeater_id, repeater in protocol._repeaters.items():
+        states[repeater.connection_state].append(int.from_bytes(repeater_id, 'big'))
     return states
 ```
 
 ## Best Practices
 
-1. **Read-Only Access**: Avoid directly modifying the `_repeaters` dictionary or repeater states. Instead, use protocol methods to interact with repeaters.
+1. **Read-Only Access**: Avoid directly modifying the `_repeaters` dictionary or repeater states. Use protocol methods to interact with repeaters.
 
-2. **State Handling**: Always check `connection_state` before acting on a repeater.
+2. **State Handling**: Always check `connection_state == 'connected'` before acting on a repeater.
 
-3. **Error Handling**: Wrap repeater access in try/except blocks as repeaters may disconnect at any time.
+3. **Error Handling**: Wrap repeater access in try/except — repeaters may disconnect at any time.
 
-4. **Event-Driven**: Use the event hooks in preference to polling when possible.
+4. **Event-Driven**: Prefer the override points above to polling.
 
-5. **Thread Safety**: HBlink4 uses Twisted's event loop. Ensure all access is done through Twisted's thread-safe mechanisms if operating from other threads.
+5. **Single-Threaded**: HBlink4 runs on one asyncio event loop and its state is not protected by locks. From another thread, use `loop.call_soon_threadsafe()`; never touch protocol state directly.
+
+6. **Don't Block**: Handlers run on the event loop. Anything slow must be dispatched with `asyncio.create_task()` or run in an executor, or it will stall packet processing for every repeater.
 
 ## Limitations
 
-1. Direct modification of routing rules must be done via configuration before startup (if DMRD is not subclassed)
+1. Routing rules are set by configuration before startup unless you subclass the handlers
 2. Some repeater metadata may contain non-UTF8 characters
-3. All radio IDs are handled as raw bytes - remember to convert to int for display/logging
+3. Radio IDs are handled as raw bytes — convert to int for display/logging
 
-## Advanced Topics
+## Graceful Shutdown
 
-### Custom Packet Processing
-To implement custom DMR packet processing, subclass HBProtocol and override:
-
-- `datagramReceived`: For raw packet access
-- `handle_dmr_data`: For DMR data packet processing
-- Other specific handlers like `handle_repeater_login`, etc.
-
-### Graceful Shutdown
-If implementing custom shutdown logic, ensure you:
-
-1. Call protocol.cleanup() to send disconnect messages
-2. Allow time for messages to be sent (0.5s recommended)
-3. Stop the reactor
+1. Call `protocol.cleanup()` on each protocol to send disconnect messages
+2. Close each transport
+3. Allow the loop a moment to flush before exiting

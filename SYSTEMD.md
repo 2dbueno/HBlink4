@@ -7,37 +7,10 @@ This directory contains systemd service files for running HBlink4 and its dashbo
 - `hblink4.service` - Main HBlink4 DMR server
 - `hblink4-dash.service` - Web dashboard (depends on hblink4.service)
 
-## Upgrading an existing install
-
-**The units now invoke the modules directly** instead of going through a
-launcher script, so there is one less moving part between systemd and the
-program. `run_hblink.py` and `run_dashboard.py` still exist in the project root
-as convenience launchers for interactive use. There is **no install step** —
-everything runs straight from the checkout, so a `git pull` needs nothing beyond
-a restart.
-
-What changed in the units:
-
-| | Old | New |
-|---|---|---|
-| `hblink4` `ExecStart` | `venv/bin/python .../run.py` | `venv/bin/python .../hblink4/hblink.py .../config/config.json` |
-| `hblink4-dash` `ExecStart` | `venv/bin/python .../run_dashboard.py` | `venv/bin/python .../dashboard/server.py` (bind/port now from `dashboard/config.json`) |
-| `hblink4-dash` `WorkingDirectory` | `.../hblink4/dashboard` | `.../hblink4` |
-| both | `PrivateTmp=true` | *removed* — see [Security Features](#security-features) |
-
-```bash
-cd /home/cort/hblink4
-sudo cp hblink4.service hblink4-dash.service /etc/systemd/system/
-sudo systemctl daemon-reload
-sudo systemctl restart hblink4 hblink4-dash
-systemctl status hblink4 hblink4-dash --no-pager
-```
-
-Confirm the new command lines took effect:
-
-```bash
-systemctl show -p ExecStart hblink4 hblink4-dash | grep -o 'argv\[\]=[^;]*'
-```
+The units run the programs straight from the checkout — there is no install
+step, so after a `git pull` you only need to restart the services. If you are
+upgrading from a version whose units pointed at `run.py`, re-copy the unit files
+below before restarting.
 
 ## Installation
 
