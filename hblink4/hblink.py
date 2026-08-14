@@ -45,13 +45,14 @@ if __package__ in (None, ""):
 
 from .constants import (
     RPTA, RPTL, RPTK, RPTC, RPTCL, MSTCL, DMRD,
-    MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA
+    MSTNAK, MSTPONG, RPTPING, RPTACK, RPTP, RPTO, DMRA,
+    PENDING_LOGIN_TIMEOUT
 )
 from .access_control import RepeaterMatcher
 from .events import EventEmitter
 from .user_cache import UserCache
 from .utils import (
-    safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int,
+    safe_decode_bytes, normalize_addr, rid_to_int, bytes_to_int, format_uptime,
     cleanup_old_logs, setup_logging, PeerAddress, detect_connection_type,
     fmt_ts_tg
 )
@@ -109,7 +110,13 @@ class HBProtocol(asyncio.DatagramProtocol):
         super().__init__()
         # All inbound connections (repeaters, hotspots, network links) - see models.py terminology note
         self._repeaters: Dict[bytes, RepeaterState] = {}
-        
+
+        # Logins claiming a radio ID that is already registered from a DIFFERENT
+        # sockaddr. Held aside so an unauthenticated RPTL cannot displace a live
+        # registration; the claimant is promoted (and the incumbent dropped) only
+        # once it proves the passphrase in _handle_auth_response.
+        self._pending_logins: Dict[bytes, RepeaterState] = {}
+
         # Outbound connection state management (Phase 2)
         self._outbounds: Dict[str, 'OutboundState'] = {}  # keyed by connection name
         self._openbridges: Dict[str, 'OpenBridgeState'] = {}  # keyed by OBP name
@@ -231,7 +238,12 @@ class HBProtocol(asyncio.DatagramProtocol):
             'rpto_received': repeater.rpto_received,
             'translations': translations_list,
             'last_ping': repeater.last_ping,
-            'missed_pings': repeater.missed_pings
+            'missed_pings': repeater.missed_pings,
+            # Authoritative session start. The dashboard must use this rather than
+            # the event's arrival time: repeater_connected is also emitted on missed
+            # pings, on recovery, and on dashboard-reconnect state replay, so an
+            # arrival-time stamp resets uptime for repeaters that never dropped.
+            'connect_time': repeater.connect_time
         }
     
     def _load_repeater_tg_config(self, repeater_id: bytes, repeater: RepeaterState) -> None:
@@ -1533,7 +1545,23 @@ class HBProtocol(asyncio.DatagramProtocol):
         self._data_log_recent = {
             k: v for k, v in self._data_log_recent.items() if v > data_log_cutoff
         }
-    
+
+        # Drop unanswered ID-takeover challenges
+        self._expire_pending_logins(current_time)
+
+    def _expire_pending_logins(self, current_time: float) -> None:
+        """
+        Discard takeover challenges that were never answered. A pending login holds
+        no routing state and can never displace anything on its own, so expiring it
+        only prevents unbounded growth from repeated unauthenticated claims.
+        """
+        cutoff = current_time - PENDING_LOGIN_TIMEOUT
+        for repeater_id, pending in list(self._pending_logins.items()):
+            if pending.last_ping < cutoff:
+                del self._pending_logins[repeater_id]
+                LOGGER.debug(f'Expired unanswered login challenge for repeater {rid_to_int(repeater_id)} '
+                             f'from {pending.ip}:{pending.port}')
+
     def _cleanup_user_cache(self):
         """Periodic cleanup of expired user cache entries"""
         if self._user_cache:
@@ -1775,6 +1803,12 @@ class HBProtocol(asyncio.DatagramProtocol):
                     repeater_id = data[4:8]
                 
             if not repeater_id:
+                # TODO (see docs/TODO.md, "Unreachable dispatch branches"): this
+                # also swallows TRUNCATED packets of known types. A short RPTL
+                # (fewer than 8 bytes) makes data[4:8] empty, so a malformed login
+                # is reported as an unknown packet type — misleading when reading
+                # logs. Distinguish "command not recognized" from "known command,
+                # too short" before changing anything here.
                 # Unknown packet type - log full details for investigation
                 try:
                     cmd_str = _command.decode('utf-8', errors='replace')
@@ -1797,8 +1831,12 @@ class HBProtocol(asyncio.DatagramProtocol):
                 self._send_nak(repeater_id, addr, reason="Repeater not registered")
                 return
 
-            # Update ping time for connected repeaters
-            if repeater and repeater.connection_state == 'connected':
+            # Update ping time for connected repeaters. The address must match the
+            # registration: a packet bearing a known ID from any other sockaddr must
+            # not hold the registration alive, or a stale/spoofed source could keep
+            # a dead entry from ever timing out.
+            if (repeater and repeater.connection_state == 'connected'
+                    and self._addr_matches_repeater(repeater, addr)):
                 repeater.last_ping = time()
                 # If missed_pings is being cleared, notify dashboard
                 if repeater.missed_pings > 0:
@@ -1811,35 +1849,50 @@ class HBProtocol(asyncio.DatagramProtocol):
             if _command == DMRD:
                 self._handle_dmr_data(data, addr)
             elif _command == RPTL:
-                LOGGER.debug(f'Received RPTL from {ip}:{port} - Repeater Login Request')
+                LOGGER.debug(f'Received RPTL from repeater {rid_to_int(repeater_id)} at {ip}:{port} - Repeater Login Request')
                 self._handle_repeater_login(repeater_id, addr)
             elif len(data) == 4:  # Special case: raw repeater ID login
-                # Try to interpret as a raw repeater ID
+                # DEAD CODE (see docs/TODO.md, "Unreachable dispatch branches").
+                # Unreachable: reaching here requires repeater_id to be truthy,
+                # but repeater_id is only ever set when _command matched one of
+                # the known commands above — each of which has its own branch in
+                # this chain. A bare 4-byte radio ID matches none of them, so it
+                # returns at the `if not repeater_id` guard and never arrives.
+                # Left in place rather than deleted: decide whether raw-ID login
+                # should be supported at all before removing it.
                 LOGGER.debug(f'Received possible raw repeater ID login from {ip}:{port}')
                 self._handle_repeater_login(data, addr)
             elif _command == RPTK:
-                LOGGER.debug(f'Received RPTK from {ip}:{port} - Authentication Response')
+                LOGGER.debug(f'Received RPTK from repeater {rid_to_int(repeater_id)} at {ip}:{port} - Authentication Response')
                 self._handle_auth_response(repeater_id, data[8:], addr)
             elif _command == RPTC:
                 if data[:5] == RPTCL:
-                    LOGGER.debug(f'Received RPTCL from {ip}:{port} - Disconnect Request')
+                    LOGGER.debug(f'Received RPTCL from repeater {rid_to_int(repeater_id)} at {ip}:{port} - Disconnect Request')
                     self._handle_disconnect(repeater_id, addr)
                 else:
-                    LOGGER.debug(f'Received RPTC from {ip}:{port} - Configuration Data')
+                    LOGGER.debug(f'Received RPTC from repeater {rid_to_int(repeater_id)} at {ip}:{port} - Configuration Data')
                     self._handle_config(data, addr)
             elif _command[:4] == RPTP:  # Check just RPTP prefix since that's enough to identify RPTPING
-                LOGGER.debug(f'Received RPTPING from {ip}:{port} - Repeater Keepalive')
+                LOGGER.debug(f'Received RPTPING from repeater {rid_to_int(repeater_id)} at {ip}:{port}')
                 self._handle_ping(repeater_id, addr)
             elif _command == RPTO:
-                LOGGER.info(f'Received RPTO from {ip}:{port} - Options/TG Configuration')
+                LOGGER.info(f'Received RPTO from repeater {rid_to_int(repeater_id)} at {ip}:{port} - Options/TG Configuration')
                 self._handle_options(repeater_id, data[8:], addr)
             elif _command == DMRA:
-                LOGGER.debug(f'Received DMRA from {ip}:{port} - DMR Talker Alias (packet length: {len(data)})')
+                LOGGER.debug(f'Received DMRA from repeater {rid_to_int(repeater_id)} at {ip}:{port} - DMR Talker Alias (packet length: {len(data)})')
                 if repeater_id:
                     self._handle_talker_alias(repeater_id, data[8:], addr)
                 else:
+                    # DEAD CODE (see docs/TODO.md, "Unreachable dispatch branches").
+                    # Unreachable: a falsy repeater_id already returned at the
+                    # `if not repeater_id` guard above, so this branch cannot run.
                     LOGGER.warning(f'DMRA packet from {ip}:{port} has no repeater_id - packet hex: {data[:20].hex()}')
             else:
+                # DEAD CODE (see docs/TODO.md, "Unreachable dispatch branches").
+                # Unreachable: reaching the else requires repeater_id to be truthy,
+                # which only happens for commands that each have a branch above.
+                # A genuinely unknown command is already reported by the
+                # `if not repeater_id` guard, which is where such packets land.
                 # Try to decode the command as ASCII for better logging
                 try:
                     cmd_str = _command.decode('utf-8', errors='replace')
@@ -2614,16 +2667,67 @@ class HBProtocol(asyncio.DatagramProtocol):
         
         repeater = self._repeaters.get(repeater_id)
         if repeater:
+            # This radio ID is already registered, so this login is a reconnect —
+            # report how long the previous session lasted and leave the judgement
+            # to the operator. Hours means a NAT lease expired or the device was
+            # power cycled; a few seconds, over and over, means it cannot stay
+            # connected. Covers both the same-address and new-address cases.
+            #
+            # Long-lived sessions reconnecting are unremarkable, so they can be
+            # filtered out: report only when the previous session was SHORTER than
+            # reconnect_report_threshold (0 reports every reconnect). Suppressing
+            # the line loses no record of the connection itself — _handle_config
+            # still logs "configured successfully" for every successful connect.
+            #
+            # Only meaningful once a session actually existed: connect_time is
+            # stamped where connection_state becomes 'connected', so in any earlier
+            # state it is just the object's creation time and "since last connect"
+            # would be a false statement. A login-stage retry is already covered by
+            # the "login retry, resending same salt" line below.
+            session_length = time() - repeater.connect_time
+            report_threshold = CONFIG.get('global', {}).get('reconnect_report_threshold', 3600)
+            if (repeater.connection_state == 'connected'
+                    and (report_threshold <= 0 or session_length < report_threshold)):
+                LOGGER.info(
+                    f'Repeater {rid_to_int(repeater_id)} logging in from {ip}:{port} - '
+                    f're-connecting from {repeater.ip}:{repeater.port} '
+                    f'({format_uptime(session_length)} since last connect)'
+                )
+
             if not self._addr_matches_repeater(repeater, addr):
-                LOGGER.warning(f'Repeater {rid_to_int(repeater_id)} attempting to connect from {ip}:{port} but already connected from {repeater.ip}:{repeater.port}')
-                # Remove the old registration first
-                old_addr = repeater.sockaddr
-                self._remove_repeater(repeater_id, "reconnect_different_port")
-                # Then send NAK to the old address to ensure cleanup
-                self._send_nak(repeater_id, old_addr, reason="Repeater reconnecting from new address")
-                # Continue with new connection below
+                # A new sockaddr does NOT inherit the old session, and we never
+                # assume it is the incumbent behind a remapped NAT port. It is held
+                # as a pending login and must prove the passphrase before it may
+                # replace the incumbent — see _handle_auth_response. Until then the
+                # live registration is untouched, so an unauthenticated packet
+                # bearing a known radio ID cannot knock a repeater off the network.
+                pending = self._pending_logins.get(repeater_id)
+                if pending and pending.sockaddr == normalize_addr(addr):
+                    salt = pending.salt  # same claimant retrying, reuse salt
+                else:
+                    salt = None
+                pending = RepeaterState(repeater_id=repeater_id, ip=ip, port=port)
+                if salt is not None:
+                    pending.salt = salt
+                pending.connection_state = 'login'
+                # last_ping is set to now by RepeaterState's default factory and is
+                # what _expire_pending_logins ages the challenge out on.
+                self._pending_logins[repeater_id] = pending
+
+                # INFO, not WARNING: a NAT lease expiring is routine, and warning on
+                # it would train the operator to ignore warnings. The reconnect line
+                # above carries the diagnostic; this line just states the action.
+                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login from {ip}:{port} claims an ID already '
+                            f'registered from {repeater.ip}:{repeater.port} - challenging; the incumbent is '
+                            f'kept until this address authenticates')
+                salt_bytes = pending.salt.to_bytes(4, 'big')
+                self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
+                return
             else:
-                # Same repeater reconnecting from same IP:port
+                # Same repeater reconnecting from same IP:port. Any outstanding
+                # takeover challenge is now moot — drop it so a later RPTK is
+                # matched against this login's salt, not a stale one.
+                self._pending_logins.pop(repeater_id, None)
                 old_state = repeater.connection_state
                 LOGGER.info(f'Repeater {rid_to_int(repeater_id)} reconnecting while in state {old_state}')
                 # Preserve existing salt on login retry
@@ -2633,14 +2737,18 @@ class HBProtocol(asyncio.DatagramProtocol):
                     repeater.salt = existing_salt  # Reuse same salt
                     repeater.connection_state = 'login'
                     self._repeaters[repeater_id] = repeater
-                    
+
                     # Send login ACK with same salt
                     salt_bytes = repeater.salt.to_bytes(4, 'big')
                     self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
                     LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login retry from {ip}:{port}, resending same salt: {repeater.salt}')
                     return
-                
-        # Create or update repeater state (fresh login)
+
+        # Create or update repeater state (fresh login). Any outstanding takeover
+        # challenge is moot here — there is nothing to take over from — and must be
+        # dropped, or it would intercept this login's RPTK and check it against the
+        # stale salt, NAKing a repeater that answered correctly.
+        self._pending_logins.pop(repeater_id, None)
         repeater = RepeaterState(repeater_id=repeater_id, ip=ip, port=port)
         repeater.connection_state = 'login'
         self._repeaters[repeater_id] = repeater
@@ -2650,8 +2758,65 @@ class HBProtocol(asyncio.DatagramProtocol):
         self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
         LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login request from {ip}:{port}, sent salt: {repeater.salt}')
 
+    def _handle_takeover_auth_response(self, repeater_id: bytes, pending: RepeaterState,
+                                       auth_hash: bytes, addr: PeerAddress) -> None:
+        """
+        Authenticate a login that claims a radio ID already registered from another
+        sockaddr. Only a correct passphrase earns the takeover; on every failure the
+        pending state is discarded and the incumbent registration is left untouched.
+        """
+        del self._pending_logins[repeater_id]
+        ip, port = addr[0], addr[1]
+
+        try:
+            repeater_config = self._matcher.get_repeater_config(
+                rid_to_int(repeater_id), pending.get_callsign_str()
+            )
+            if repeater_config is None:
+                LOGGER.warning(f'Denied takeover of repeater {rid_to_int(repeater_id)} by {ip}:{port} '
+                               f'- no matching configuration; incumbent retained')
+                self._send_nak(repeater_id, addr, reason="No matching configuration")
+                return
+
+            salt_bytes = pending.salt.to_bytes(4, 'big')
+            calc_hash = bytes.fromhex(sha256(b''.join([salt_bytes, repeater_config.passphrase.encode()])).hexdigest())
+            if auth_hash != calc_hash:
+                LOGGER.warning(f'Denied takeover of repeater {rid_to_int(repeater_id)} by {ip}:{port} '
+                               f'- authentication failed; incumbent retained')
+                self._send_nak(repeater_id, addr, reason="Authentication failed")
+                return
+
+            # Passphrase proven. Now — and only now — the incumbent gives way.
+            # Order matters: _remove_repeater deletes by ID, so the old entry must
+            # go before the claimant is installed under the same key.
+            incumbent = self._repeaters.get(repeater_id)
+            if incumbent is not None:
+                old_addr = incumbent.sockaddr
+                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated from {ip}:{port} - '
+                            f'replacing registration from {old_addr[0]}:{old_addr[1]}')
+                self._remove_repeater(repeater_id, "replaced_by_new_address")
+                self._send_nak(repeater_id, old_addr, reason="Replaced by new registration")
+
+            pending.authenticated = True
+            pending.connection_state = 'config'
+            self._repeaters[repeater_id] = pending
+            self._send_packet(b''.join([RPTACK, repeater_id]), addr)
+            LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated successfully from {ip}:{port}')
+
+        except Exception as e:
+            LOGGER.error(f'Authentication error for repeater {rid_to_int(repeater_id)} from {ip}:{port}: {str(e)}')
+            self._send_nak(repeater_id, addr)
+
     def _handle_auth_response(self, repeater_id: bytes, auth_hash: bytes, addr: PeerAddress) -> None:
         """Handle authentication response from repeater"""
+        # A claimant challenged by _handle_repeater_login for an already-registered
+        # ID answers here. It authenticates against its own pending state so that a
+        # failure cannot touch the incumbent's registration.
+        pending = self._pending_logins.get(repeater_id)
+        if pending is not None and pending.sockaddr == normalize_addr(addr):
+            self._handle_takeover_auth_response(repeater_id, pending, auth_hash, addr)
+            return
+
         repeater = self._validate_repeater(repeater_id, addr)
         if not repeater or repeater.connection_state != 'login':
             LOGGER.warning(f'Auth response from repeater {rid_to_int(repeater_id)} in wrong state')
@@ -2736,6 +2901,9 @@ class HBProtocol(asyncio.DatagramProtocol):
 
             repeater.connected = True
             repeater.connection_state = 'connected'
+            # Mark the start of this session; the next login for this ID reports
+            # the delta so the operator can see how long it actually stayed up.
+            repeater.connect_time = time()
             
             # Load and cache TG sets from config for fast routing checks
             self._load_repeater_tg_config(repeater_id, repeater)
@@ -3276,8 +3444,11 @@ class HBProtocol(asyncio.DatagramProtocol):
     def _handle_ping(self, repeater_id: bytes, addr: PeerAddress) -> None:
         """Handle ping (RPTPING/RPTP) from the repeater as a keepalive."""
         repeater = self._validate_repeater(repeater_id, addr)
-        if not repeater or repeater.connection_state != 'connected':
-            LOGGER.warning(f'Ping from repeater {rid_to_int(repeater_id)} in wrong state (state="{repeater.connection_state}" if repeater else "None")')
+        if not repeater:
+            return  # _validate_repeater already logged and NAKed
+        if repeater.connection_state != 'connected':
+            LOGGER.warning(f'Ping from repeater {rid_to_int(repeater_id)} at {addr[0]}:{addr[1]} '
+                           f'in wrong state (state={repeater.connection_state})')
             self._send_nak(repeater_id, addr, reason="Wrong connection state")
             return
             
@@ -3294,7 +3465,7 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._events.emit('repeater_connected', self._prepare_repeater_event_data(repeater_id, repeater))
         
         # Send MSTPONG in response to RPTPING/RPTP from repeater
-        LOGGER.debug(f'Sending MSTPONG to repeater {rid_to_int(repeater_id)}')
+        LOGGER.debug(f'Sending MSTPONG to repeater {rid_to_int(repeater_id)} at {addr[0]}:{addr[1]}')
         self._send_packet(b''.join([MSTPONG, repeater_id]), addr)
 
     def _handle_disconnect(self, repeater_id: bytes, addr: PeerAddress) -> None:

@@ -10,6 +10,8 @@
         "disable_ipv6": true,
         "max_missed": 3,
         "timeout_duration": 30,
+        "_comment_reconnect_report_threshold": "When a repeater logs in again, the log shows how long its previous session lasted. Sessions that ran longer than this many seconds are routine (NAT lease expiring, power cycle) and are not reported; shorter ones are, because a repeater reconnecting every few seconds cannot stay online. Set to 0 to report every reconnect. Connections themselves are always logged regardless of this setting.",
+        "reconnect_report_threshold": 3600,
         "logging": {
             "file": "logs/hblink.log",
             "console_level": "INFO",

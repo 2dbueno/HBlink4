@@ -297,6 +297,11 @@ class RepeaterState:
     connected: bool = False
     authenticated: bool = False
     last_ping: float = field(default_factory=time)
+    # When this registration last reached the 'connected' state. Stamped at
+    # construction so a login that never completes still has a usable value, then
+    # re-stamped on transition to 'connected'. Used to report how long the
+    # previous session lasted when a radio ID logs in again.
+    connect_time: float = field(default_factory=time)
     ping_count: int = 0
     missed_pings: int = 0
     salt: int = field(default_factory=lambda: randint(0, 0xFFFFFFFF))

@@ -25,6 +25,7 @@ DMR_DATA_PACKET_LENGTH = 55  # Minimum length of valid DMR data packet
 DMR_PORT = 62031  # Default HomeBrew DMR port
 DEFAULT_PING_TIME = 5.0  # Default ping interval in seconds
 MAX_MISSED_PINGS = 3  # Maximum number of missed pings before disconnect
+PENDING_LOGIN_TIMEOUT = 30.0  # Seconds a login challenging an already-registered ID may go unanswered
 
 # DMR Sync Patterns (48 bits / 6 bytes)
 # These patterns appear in the DMR payload at bytes 20-25 to identify frame types

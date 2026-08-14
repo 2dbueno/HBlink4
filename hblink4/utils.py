@@ -43,6 +43,26 @@ def normalize_addr(addr: PeerAddress) -> Tuple[str, int]:
     return (addr[0], addr[1])
 
 
+def format_uptime(seconds: float) -> str:
+    """
+    Format an elapsed time as D:HH:MM:SS for log output.
+
+    Zero-padded so the values line up when scanning a log column — the pattern
+    across repeated lines is the diagnostic, not any single value.
+
+    Args:
+        seconds: Elapsed seconds (negative values are clamped to zero)
+
+    Returns:
+        Elapsed time as 'D:HH:MM:SS', e.g. '0:00:00:05' or '3:04:17:09'
+    """
+    total = int(max(0.0, seconds))
+    days, rem = divmod(total, 86400)
+    hours, rem = divmod(rem, 3600)
+    minutes, secs = divmod(rem, 60)
+    return f'{days}:{hours:02d}:{minutes:02d}:{secs:02d}'
+
+
 def rid_to_int(repeater_id: bytes) -> int:
     """
     Convert repeater ID bytes to int.

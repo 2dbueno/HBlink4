@@ -4,6 +4,7 @@
     "global": {
         "max_missed": 3,
         "timeout_duration": 30,
+        "reconnect_report_threshold": 3600,
         "disable_ipv6": false,
         "bind_ipv4": "0.0.0.0",
         "bind_ipv6": "::",

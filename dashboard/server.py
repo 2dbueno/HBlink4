@@ -661,7 +661,12 @@ class EventReceiver:
         if event_type == 'repeater_connected':
             state.repeaters[data['repeater_id']] = {
                 **data,
-                'connected_at': event['timestamp'],
+                # Prefer the server's session start. repeater_connected is also
+                # emitted on missed pings, on recovery, and when this dashboard
+                # reconnects and the server replays state — using the event's
+                # arrival time would reset uptime for repeaters that never dropped.
+                # Fall back for servers older than this field.
+                'connected_at': data.get('connect_time', event['timestamp']),
                 'last_activity': event['timestamp'],
                 'last_ping': data.get('last_ping', event['timestamp']),
                 'missed_pings': data.get('missed_pings', 0),

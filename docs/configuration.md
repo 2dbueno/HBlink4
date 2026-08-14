@@ -20,6 +20,7 @@ The `global` section contains server-wide settings that control the basic operat
     "global": {
         "max_missed": 3,
         "timeout_duration": 30,
+        "reconnect_report_threshold": 3600,
         "bind_ipv4": "0.0.0.0",
         "port_ipv4": 62031,
         "bind_ipv6": "::",
@@ -44,6 +45,7 @@ The `global` section contains server-wide settings that control the basic operat
 |---------|------|-------------|
 | `max_missed` | number | Maximum consecutive missed pings before disconnecting a repeater (default: 3) |
 | `timeout_duration` | number | Seconds between expected pings from repeaters (default: 30) |
+| `reconnect_report_threshold` | number | When a repeater logs in again, the log reports how long its previous session lasted. Sessions longer than this many seconds are routine and are not reported; shorter ones are. Set to `0` to report every reconnect (default: 3600). Connections are always logged regardless of this setting |
 | `disable_ipv6` | boolean | Bind IPv4 only. The shipped sample config sets this to `true`, which is what most networks want; if the setting is absent altogether the built-in default is `false` |
 | `bind_ipv4` | string | IPv4 address to bind ("0.0.0.0" for all IPv4 interfaces) |
 | `bind_ipv6` | string | IPv6 address to bind ("::" for all IPv6 interfaces) |

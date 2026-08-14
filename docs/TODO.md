@@ -86,9 +86,35 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
+### 3. Unreachable Dispatch Branches and Misreported Malformed Logins 🟢
+**Status**: Not started — identified and commented in code, August 14, 2026
+**Difficulty**: Low
+**Dependencies**: None (all within `HBProtocol.datagram_received` in `hblink4/hblink.py`)
+**Description**: Three related issues in the inbound packet dispatch chain, found while adding radio IDs to the dispatch log lines. None causes incorrect behavior today — the dead branches simply never run — but they mislead anyone reading the code or the logs. Each site is marked with a `DEAD CODE` or `TODO` comment pointing here.
+
+**The root cause**: `repeater_id` is extracted only for known commands, then `if not repeater_id: return` fires before the dispatch chain. So by the time dispatch runs, `_command` is guaranteed to be one of the known commands — every one of which has its own branch.
+
+**1. Raw 4-byte repeater ID login is unreachable**
+- The `elif len(data) == 4` branch intends to accept a bare radio ID as a login.
+- A bare radio ID matches none of the command constants, so `repeater_id` stays `None` and the packet returns at the guard.
+- **Decide first**: should raw-ID login be supported at all? If yes, the check must move *above* the guard. If no, delete the branch. Do not simply "fix" the reachability without answering that — it would newly accept unauthenticated 4-byte packets as logins.
+
+**2. Final `else: Unknown command received` is unreachable**
+- Genuinely unknown commands are already reported by the `UNKNOWN PACKET TYPE` guard.
+- Safe to delete once (1) is resolved, since the two interact.
+
+**3. Truncated packets of known types are reported as "unknown packet type"**
+- A short RPTL (fewer than 8 bytes) makes `data[4:8]` empty, so `repeater_id` is falsy and the packet is logged as an unknown type.
+- The operator sees `⚠️ UNKNOWN PACKET TYPE` for what is really a malformed login, which sends diagnosis in the wrong direction.
+- **Fix**: distinguish "command not recognized" from "known command, wrong length", and log the latter as a malformed packet naming the expected command and length.
+
+**Note**: fixing (3) is independent of (1) and (2) and is the one with real operator-facing value.
+
+---
+
 ## Low Priority
 
-### 3. Web-Based Configuration UI 🟡
+### 4. Web-Based Configuration UI 🟡
 **Status**: Not started  
 **Difficulty**: Medium  
 **Dependencies**: Dashboard  
@@ -107,4 +133,4 @@ This document tracks planned features and enhancements for HBlink4. Items are pr
 
 ---
 
-**Last Updated**: April 21, 2026
+**Last Updated**: August 14, 2026
