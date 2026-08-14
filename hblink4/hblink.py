@@ -2718,8 +2718,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 # it would train the operator to ignore warnings. The reconnect line
                 # above carries the diagnostic; this line just states the action.
                 LOGGER.info(f'Repeater {rid_to_int(repeater_id)} login from {ip}:{port} claims an ID already '
-                            f'registered from {repeater.ip}:{repeater.port} - challenging; the incumbent is '
-                            f'kept until this address authenticates')
+                            f'registered from {repeater.ip}:{repeater.port} - challenging')
                 salt_bytes = pending.salt.to_bytes(4, 'big')
                 self._send_packet(b''.join([RPTACK, salt_bytes]), addr)
                 return
