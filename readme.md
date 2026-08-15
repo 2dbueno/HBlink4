@@ -211,7 +211,16 @@ Comprehensive documentation is available in the `docs/` directory:
 - **[Release Notes v4.8.0](docs/RELEASE_NOTES_v4.8.0.md)** - Current release — unit (private) call routing, DMR data-call classification, RPTO empty-slot fix
 - **[Release Notes v4.7.0](docs/RELEASE_NOTES_v4.7.0.md)** - asyncio, DMRA, outbound connections, DMRD translation
 
+## Companion programs
 
+Separate repositories by the same author. All are small, dependency-free C
+programs that run alongside HBlink4 and connect to it over the network.
+
+| Program | Purpose |
+|---|---|
+| [dmr-talkback](https://github.com/n0mjs710/dmr-talkback) | Voice test ("echo") endpoint. Connects as an ordinary HBP repeater, records a call and plays it back so the caller hears their own audio. Answers group calls, private (unit) calls, or both. Needs an access-control entry for its radio ID; it subscribes to its own talkgroup via `Options=`. |
+| [ipsc2hbpc](https://github.com/n0mjs710/ipsc2hbpc) | IPSC ⇄ HBP translator. Connects Motorola IPSC systems (and c-Bridge IPSC peers) to HBlink4 as a repeater-side connection. |
+| [cc2obp](https://github.com/n0mjs710/cc2obp) | c-Bridge CC-CC ⇄ OpenBridge translator. Peers an HBlink4 OpenBridge trunk with a c-Bridge over its native CC-CC link. |
 
 ## No Support Is Provided
 
