@@ -429,11 +429,12 @@ class HBProtocol(asyncio.DatagramProtocol):
                 transport.sendto(rptl_packet)
                 LOGGER.info(f'[{config.name}] Sent RPTL (login) with ID {config.radio_id}')
                 
-                # Wait for MSTCL (challenge) with salt
+                # Wait for the challenge: RPTACK + salt, NOT MSTCL. MSTCL is a
+                # server shutdown notice and never appears in the handshake.
                 # State machine is driven by _handle_outbound_packet() receiving packets
                 state.connected = True
-                
-                LOGGER.info(f'[{config.name}] Connection initiated, waiting for MSTCL...')
+
+                LOGGER.info(f'[{config.name}] Connection initiated, waiting for RPTACK + salt (challenge)...')
                 
                 # Phase 4: Keepalive loop
                 while state.connected:
