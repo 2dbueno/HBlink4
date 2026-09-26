@@ -54,6 +54,14 @@
         "unix_socket": "/tmp/hblink4.sock",
         "buffer_size": 65536
     },
+    "dynamic_talkgroups": {
+        "_comment": "Optional local disconnect/reactivation control for one talkgroup. Disabled by default. A group voice PTT on slot/talkgroup activates this connection for receive; a group voice PTT on disconnect_talkgroup deactivates receive for this connection only and is consumed locally.",
+        "enabled": false,
+        "slot": 2,
+        "talkgroup": 100,
+        "disconnect_talkgroup": 4000,
+        "initial_active": true
+    },
     "blacklist": {
         "_comment": "EXAMPLE RANGES -- these IDs are invented for illustration. Replace them with IDs you actually want to refuse, or omit the section entirely.",
         "patterns": [

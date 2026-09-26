@@ -396,6 +396,55 @@ The `stream_timeout` and `stream_hang_time` settings control two different aspec
 
 See [Hang Time Documentation](hang_time.md) for detailed explanation of these features.
 
+## Dynamic Talkgroup Participation
+
+The optional `dynamic_talkgroups` section lets one talkgroup have local
+subscribe/disconnect behavior without making the disconnect TG routable.
+
+This is disabled by default. When enabled, a group voice PTT on the configured
+`slot`/`talkgroup` marks only that connected repeater/hotspot as active for
+receiving that talkgroup. A group voice PTT on `disconnect_talkgroup` is
+consumed locally: it is not emitted as a normal stream, is not forwarded to any
+other repeater/hotspot, and only disables receive participation for the sender.
+The HomeBrew connection remains authenticated and connected.
+
+```json
+"dynamic_talkgroups": {
+    "enabled": true,
+    "slot": 2,
+    "talkgroup": 100,
+    "disconnect_talkgroup": 4000,
+    "initial_active": true
+}
+```
+
+Options:
+
+| Option | Type | Description |
+|--------|------|-------------|
+| `enabled` | boolean | Enables dynamic participation. Default: `false` |
+| `slot` | number | Timeslot controlled by this feature. BuenoDMR uses `2` |
+| `talkgroup` | number | Talkgroup that activates/reactivates receive participation |
+| `disconnect_talkgroup` | number | Local command TG that deactivates receive participation and is never forwarded |
+| `initial_active` | boolean | Whether a newly connected repeater/hotspot starts active. Default: `true` |
+
+For a BuenoDMR TS2/TG100-only network, keep the normal repeater ACL restrictive:
+
+```json
+"repeater_configurations": {
+    "default": {
+        "passphrase": "CHANGE-ME",
+        "slot1_talkgroups": [],
+        "slot2_talkgroups": [100],
+        "trust": false
+    }
+}
+```
+
+Do not add TG4000 to `slot2_talkgroups`. TG4000 is handled before normal stream
+routing only when `dynamic_talkgroups.enabled=true`; otherwise it remains denied
+by the ordinary TG100-only ACL.
+
 ## Blacklist Rules
 
 The `blacklist` section defines patterns for blocking unwanted repeaters. Each pattern can match by ID, ID range, or callsign.

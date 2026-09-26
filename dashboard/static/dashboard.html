@@ -2482,6 +2482,19 @@
                         state.repeater_details[data.repeater_id] = data;
                     }
                     break;
+
+                case 'dynamic_talkgroup_state':
+                    if (state.repeaters && data.repeater_id) {
+                        const dynamicIdx = state.repeaters.findIndex(r => r.repeater_id == data.repeater_id);
+                        if (dynamicIdx >= 0) {
+                            state.repeaters[dynamicIdx] = {
+                                ...state.repeaters[dynamicIdx],
+                                dynamic_talkgroup_active: data.active
+                            };
+                            updateRepeaters(state.repeaters);
+                        }
+                    }
+                    break;
                     
                 case 'repeater_disconnected':
                     // Remove repeater from state immediately

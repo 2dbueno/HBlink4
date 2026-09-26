@@ -702,6 +702,18 @@ class EventReceiver:
                 state.repeaters[data['repeater_id']]['rpto_received'] = data.get('rpto_received', False)
                 state.repeaters[data['repeater_id']]['translations'] = data.get('translations', [])
                 logger.info(f"Repeater options updated via RPTO: {data['repeater_id']}")
+
+        elif event_type == 'dynamic_talkgroup_state':
+            if data['repeater_id'] in state.repeaters:
+                state.repeaters[data['repeater_id']]['dynamic_talkgroup_active'] = data.get('active', True)
+                state.repeaters[data['repeater_id']]['last_activity'] = event['timestamp']
+            logger.info(
+                "Dynamic TG state: repeater %s TG%s active=%s (%s)",
+                data.get('repeater_id'),
+                data.get('talkgroup'),
+                data.get('active'),
+                data.get('reason', 'unknown')
+            )
         
         elif event_type == 'stream_start':
             # Handle both repeater streams and outbound connection streams
