@@ -130,8 +130,8 @@ class _DynamicProtocol(HBProtocol):
                 'slot': 2,
                 'talkgroup': 100,
                 'talkgroup_bytes': (100).to_bytes(3, 'big'),
-                'disconnect_talkgroup': 4000,
-                'disconnect_talkgroup_bytes': (4000).to_bytes(3, 'big'),
+                'disconnect_talkgroup': 4100,
+                'disconnect_talkgroup_bytes': (4100).to_bytes(3, 'big'),
                 'initial_active': initial_active,
             }
         else:
@@ -296,15 +296,15 @@ def test_rpto_parsing():
     print("RPTO Parsing tests passed!\n")
 
 
-def test_tg4000_is_rejected_without_dynamic_talkgroup_feature():
-    """With normal TG100-only ACLs, TG4000 remains a denied TG."""
+def test_tg4100_is_rejected_without_dynamic_talkgroup_feature():
+    """With normal TG100-only ACLs, TG4100 remains a denied TG."""
     repeater = _connected_repeater(312100)
     proto = _DynamicProtocol({repeater.repeater_id: repeater}, enabled=False)
 
     allowed = proto._handle_stream_start(
         repeater,
         rf_src=_tg(1234567),
-        dst_id=_tg(4000),
+        dst_id=_tg(4100),
         slot=2,
         stream_id=b'\x10\x00\x00\x01',
         call_type_bit=0,
@@ -313,11 +313,11 @@ def test_tg4000_is_rejected_without_dynamic_talkgroup_feature():
     assert allowed is False
     assert repeater.get_slot_stream(2) is None
     assert repeater.dynamic_talkgroup_active is True
-    print("✓ TG4000 is rejected by TG100-only ACL when dynamic feature is disabled")
+    print("✓ TG4100 is rejected by TG100-only ACL when dynamic feature is disabled")
 
 
-def test_dynamic_tg4000_disconnect_is_local_command_not_stream():
-    """TG4000 disables only the sending hotspot and is not forwarded."""
+def test_dynamic_tg4100_leave_is_local_command_not_stream():
+    """TG4100 disables only the sending hotspot and is not forwarded."""
     source = _connected_repeater(312100)
     other = _connected_repeater(312101)
     proto = _DynamicProtocol({
@@ -350,7 +350,7 @@ def test_dynamic_tg4000_disconnect_is_local_command_not_stream():
 
     packet = _dmrd_packet(
         repeater_id=source.repeater_id,
-        dst=4000,
+        dst=4100,
         stream_id=b'\x40\x00\x00\x01',
     )
     proto._handle_dmr_data(packet, source.sockaddr)
@@ -363,8 +363,17 @@ def test_dynamic_tg4000_disconnect_is_local_command_not_stream():
         s.repeater_id for s in (source.get_slot_stream(2),) if s
     ]
     assert proto._events.events[-1][0] == 'dynamic_talkgroup_state'
+    assert proto._events.events[-1][1]['action'] == 'leave'
+    assert proto._events.events[-1][1]['reason'] == 'leave_talkgroup'
     assert proto._events.events[-1][1]['active'] is False
-    print("✓ TG4000 is consumed locally, disables TG100 receive, and is not forwarded")
+    assert proto._events.events[-1][1]['dynamic_talkgroup'] == {
+        'enabled': True,
+        'slot': 2,
+        'talkgroup': 100,
+        'disconnect_talkgroup': 4100,
+        'active': False,
+    }
+    print("✓ TG4100 is consumed locally, disables TG100 receive, and is not forwarded")
 
 
 def test_dynamic_tg100_reactivates_only_sending_hotspot():
@@ -395,7 +404,16 @@ def test_dynamic_tg100_reactivates_only_sending_hotspot():
     assert active_peer.repeater_id in stream.target_repeaters
     assert inactive_peer.repeater_id not in stream.target_repeaters
     dynamic_events = [e for e in proto._events.events if e[0] == 'dynamic_talkgroup_state']
+    assert dynamic_events[-1][1]['action'] == 'join'
+    assert dynamic_events[-1][1]['reason'] == 'join_talkgroup'
     assert dynamic_events[-1][1]['active'] is True
+    assert dynamic_events[-1][1]['dynamic_talkgroup'] == {
+        'enabled': True,
+        'slot': 2,
+        'talkgroup': 100,
+        'disconnect_talkgroup': 4100,
+        'active': True,
+    }
     print("✓ TG100 reactivates only the sending hotspot and skips inactive peers")
 
 
@@ -420,6 +438,39 @@ def test_dynamic_talkgroup_disabled_preserves_existing_target_selection():
     assert inactive_peer.repeater_id in targets
     assert active_peer.repeater_id in targets
     print("✓ With feature disabled, target selection ignores dynamic state")
+
+
+def test_dynamic_talkgroup_connect_and_sync_payload():
+    """repeater_connected/sync payload carries current dynamic TG state."""
+    repeater = _connected_repeater(312100, active=True)
+    proto = _DynamicProtocol({repeater.repeater_id: repeater})
+
+    payload = proto._prepare_repeater_event_data(repeater.repeater_id, repeater)
+
+    assert payload['dynamic_talkgroup_active'] is True
+    assert payload['dynamic_talkgroup'] == {
+        'enabled': True,
+        'slot': 2,
+        'talkgroup': 100,
+        'disconnect_talkgroup': 4100,
+        'active': True,
+    }
+
+    repeater.dynamic_talkgroup_active = False
+    replay_payload = proto._prepare_repeater_event_data(repeater.repeater_id, repeater)
+    assert replay_payload['dynamic_talkgroup']['active'] is False
+    print("✓ repeater_connected/sync payload preserves dynamic TG active/inactive state")
+
+
+def test_dynamic_talkgroup_disabled_omits_dashboard_payload():
+    repeater = _connected_repeater(312100, active=False)
+    proto = _DynamicProtocol({repeater.repeater_id: repeater}, enabled=False)
+
+    payload = proto._prepare_repeater_event_data(repeater.repeater_id, repeater)
+
+    assert 'dynamic_talkgroup' not in payload
+    assert payload['dynamic_talkgroup_active'] is False
+    print("✓ Disabled feature omits dynamic TG dashboard payload")
 
 
 def test_config_intersection():
@@ -734,10 +785,12 @@ def run_all_tests():
         test_set_based_tg_storage,
         test_routing_cache_fields,
         test_rpto_parsing,
-        test_tg4000_is_rejected_without_dynamic_talkgroup_feature,
-        test_dynamic_tg4000_disconnect_is_local_command_not_stream,
+        test_tg4100_is_rejected_without_dynamic_talkgroup_feature,
+        test_dynamic_tg4100_leave_is_local_command_not_stream,
         test_dynamic_tg100_reactivates_only_sending_hotspot,
         test_dynamic_talkgroup_disabled_preserves_existing_target_selection,
+        test_dynamic_talkgroup_connect_and_sync_payload,
+        test_dynamic_talkgroup_disabled_omits_dashboard_payload,
         test_config_intersection,
         test_rejected_tgs_detection,
         test_stream_start_routing_calculation,

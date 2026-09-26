@@ -705,14 +705,19 @@ class EventReceiver:
 
         elif event_type == 'dynamic_talkgroup_state':
             if data['repeater_id'] in state.repeaters:
-                state.repeaters[data['repeater_id']]['dynamic_talkgroup_active'] = data.get('active', True)
+                dynamic_talkgroup = data.get('dynamic_talkgroup')
+                if dynamic_talkgroup:
+                    state.repeaters[data['repeater_id']]['dynamic_talkgroup'] = dynamic_talkgroup
+                    state.repeaters[data['repeater_id']]['dynamic_talkgroup_active'] = dynamic_talkgroup.get('active', True)
+                else:
+                    state.repeaters[data['repeater_id']]['dynamic_talkgroup_active'] = data.get('active', True)
                 state.repeaters[data['repeater_id']]['last_activity'] = event['timestamp']
             logger.info(
-                "Dynamic TG state: repeater %s TG%s active=%s (%s)",
+                "Dynamic TG %s: repeater %s TG%s active=%s",
+                data.get('action', data.get('reason', 'state')),
                 data.get('repeater_id'),
                 data.get('talkgroup'),
-                data.get('active'),
-                data.get('reason', 'unknown')
+                data.get('active')
             )
         
         elif event_type == 'stream_start':
@@ -1116,7 +1121,8 @@ async def get_repeater_details(repeater_id: int):
             "rpto_received": repeater.get('rpto_received', False),
             "slot1_talkgroups": repeater.get('slot1_talkgroups') if 'slot1_talkgroups' in repeater else None,
             "slot2_talkgroups": repeater.get('slot2_talkgroups') if 'slot2_talkgroups' in repeater else None,
-            "talkgroups_source": "RPTO" if repeater.get('rpto_received') else "Pattern/Config"
+            "talkgroups_source": "RPTO" if repeater.get('rpto_received') else "Pattern/Config",
+            "dynamic_talkgroup": repeater.get('dynamic_talkgroup')
         },
         "metadata": {
             "description": details.get('description', ''),

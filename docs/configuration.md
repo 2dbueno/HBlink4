@@ -402,10 +402,10 @@ The optional `dynamic_talkgroups` section lets one talkgroup have local
 subscribe/disconnect behavior without making the disconnect TG routable.
 
 This is disabled by default. When enabled, a group voice PTT on the configured
-`slot`/`talkgroup` marks only that connected repeater/hotspot as active for
-receiving that talkgroup. A group voice PTT on `disconnect_talkgroup` is
-consumed locally: it is not emitted as a normal stream, is not forwarded to any
-other repeater/hotspot, and only disables receive participation for the sender.
+`slot`/`talkgroup` joins or reactivates only that connected repeater/hotspot for
+receiving that talkgroup. A group voice PTT on `disconnect_talkgroup` leaves
+locally: it is not emitted as a normal stream, is not forwarded to any other
+repeater/hotspot, and only disables receive participation for the sender.
 The HomeBrew connection remains authenticated and connected.
 
 ```json
@@ -413,7 +413,7 @@ The HomeBrew connection remains authenticated and connected.
     "enabled": true,
     "slot": 2,
     "talkgroup": 100,
-    "disconnect_talkgroup": 4000,
+    "disconnect_talkgroup": 4100,
     "initial_active": true
 }
 ```
@@ -441,9 +441,16 @@ For a BuenoDMR TS2/TG100-only network, keep the normal repeater ACL restrictive:
 }
 ```
 
-Do not add TG4000 to `slot2_talkgroups`. TG4000 is handled before normal stream
+Do not add TG4100 to `slot2_talkgroups`. TG4100 is handled before normal stream
 routing only when `dynamic_talkgroups.enabled=true`; otherwise it remains denied
 by the ordinary TG100-only ACL.
+
+For WPSD Custom DMR Network, expose both TGs to HBlink4:
+
+```ini
+TGRewrite0=2,100,2,100,1
+TGRewrite1=2,4100,2,4100,1
+```
 
 ## Blacklist Rules
 

@@ -241,7 +241,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         initial_active = bool(cfg.get('initial_active', True))
         LOGGER.info(
             f'✓ Dynamic talkgroup control enabled: TS{slot}/TG{talkgroup}, '
-            f'disconnect TG{disconnect_talkgroup}, '
+            f'leave TG{disconnect_talkgroup}, '
             f'initial={"active" if initial_active else "inactive"}'
         )
         return {
@@ -292,7 +292,7 @@ class HBProtocol(asyncio.DatagramProtocol):
         self, repeater: RepeaterState, rf_src: bytes, slot: int,
         dst_id: bytes, stream_id: bytes
     ) -> None:
-        """Apply local TG disconnect command and drop it from normal routing."""
+        """Apply local TG leave command and drop it from normal routing."""
         current_time = time()
         command_key = ('dynamic_disconnect', repeater.repeater_id, slot, stream_id)
         first_packet = command_key not in self._denied_streams
@@ -309,19 +309,21 @@ class HBProtocol(asyncio.DatagramProtocol):
 
             cfg = self._dynamic_talkgroup
             LOGGER.info(
-                f'Dynamic TG disconnect from repeater {rid_to_int(repeater.repeater_id)} '
+                f'Dynamic TG leave from repeater {rid_to_int(repeater.repeater_id)} '
                 f'TS{slot}/TG{int.from_bytes(dst_id, "big")} '
                 f'src={bytes_to_int(rf_src)}; '
                 f'TS{cfg["slot"]}/TG{cfg["talkgroup"]} receive disabled'
             )
             self._events.emit('dynamic_talkgroup_state', {
                 'repeater_id': rid_to_int(repeater.repeater_id),
+                'action': 'leave',
                 'slot': cfg['slot'],
                 'talkgroup': cfg['talkgroup'],
                 'disconnect_talkgroup': cfg['disconnect_talkgroup'],
+                'dynamic_talkgroup': self._dynamic_talkgroup_event_data(repeater),
                 'active': False,
                 'previous_active': was_active,
-                'reason': 'disconnect_talkgroup',
+                'reason': 'leave_talkgroup',
                 'src_id': bytes_to_int(rf_src),
             })
 
@@ -336,19 +338,33 @@ class HBProtocol(asyncio.DatagramProtocol):
 
         repeater.dynamic_talkgroup_active = True
         LOGGER.info(
-            f'Dynamic TG reactivated by repeater {rid_to_int(repeater.repeater_id)} '
+            f'Dynamic TG join from repeater {rid_to_int(repeater.repeater_id)} '
             f'TS{cfg["slot"]}/TG{cfg["talkgroup"]} src={bytes_to_int(rf_src)}'
         )
         self._events.emit('dynamic_talkgroup_state', {
             'repeater_id': rid_to_int(repeater.repeater_id),
+            'action': 'join',
             'slot': cfg['slot'],
             'talkgroup': cfg['talkgroup'],
             'disconnect_talkgroup': cfg['disconnect_talkgroup'],
+            'dynamic_talkgroup': self._dynamic_talkgroup_event_data(repeater),
             'active': True,
             'previous_active': False,
-            'reason': 'talkgroup_ptt',
+            'reason': 'join_talkgroup',
             'src_id': bytes_to_int(rf_src),
         })
+
+    def _dynamic_talkgroup_event_data(self, repeater: RepeaterState) -> Optional[dict]:
+        cfg = self._dynamic_talkgroup
+        if not cfg:
+            return None
+        return {
+            'enabled': True,
+            'slot': cfg['slot'],
+            'talkgroup': cfg['talkgroup'],
+            'disconnect_talkgroup': cfg['disconnect_talkgroup'],
+            'active': repeater.dynamic_talkgroup_active,
+        }
     
     def _prepare_repeater_event_data(self, repeater_id: bytes, repeater: RepeaterState) -> dict:
         """
@@ -360,7 +376,7 @@ class HBProtocol(asyncio.DatagramProtocol):
              nslot, int.from_bytes(ntgid, 'big')]
             for (lslot, ltgid), (nslot, ntgid) in sorted(repeater.inbound_map.items())
         ]
-        return {
+        event_data = {
             'repeater_id': rid_to_int(repeater_id),
             'callsign': repeater.get_callsign_str(),
             'location': repeater.get_location_str(),
@@ -384,6 +400,10 @@ class HBProtocol(asyncio.DatagramProtocol):
             # arrival-time stamp resets uptime for repeaters that never dropped.
             'connect_time': repeater.connect_time
         }
+        dynamic_talkgroup = self._dynamic_talkgroup_event_data(repeater)
+        if dynamic_talkgroup:
+            event_data['dynamic_talkgroup'] = dynamic_talkgroup
+        return event_data
     
     def _load_repeater_tg_config(self, repeater_id: bytes, repeater: RepeaterState) -> None:
         """

@@ -418,6 +418,16 @@
             color: #fbbf24;
             cursor: help;
         }
+
+        .dynamic-tg-active {
+            color: #22c55e;
+            font-weight: 600;
+        }
+
+        .dynamic-tg-inactive {
+            color: #f59e0b;
+            font-weight: 600;
+        }
         
         /* Slot Display */
         .slots-container {
@@ -1217,6 +1227,18 @@
                     'unknown': '❓'
                 };
                 const icon = connectionIcons[details.connection_type] || '📶';
+                const dynamicTg = details.access_control.dynamic_talkgroup;
+                const dynamicTgRow = dynamicTg && dynamicTg.enabled ? `
+                    <tr>
+                        <td>Dynamic TG${dynamicTg.talkgroup}:</td>
+                        <td>
+                            <span class="${dynamicTg.active !== false ? 'dynamic-tg-active' : 'dynamic-tg-inactive'}">
+                                ${dynamicTg.active !== false ? 'Active' : 'Inactive'}
+                            </span>
+                            <span style="color: #94a3b8;">(TS${dynamicTg.slot}, leave TG${dynamicTg.disconnect_talkgroup})</span>
+                        </td>
+                    </tr>
+                ` : '';
                 
                 modal.innerHTML = `
                     <div class="modal-content" onclick="event.stopPropagation()">
@@ -1356,6 +1378,7 @@
                                                         : '<span style="color: #6b7280;">Unknown</span>'
                                         }</td>
                                     </tr>
+                                    ${dynamicTgRow}
                                 </table>
                             </div>
                             
@@ -1549,6 +1572,20 @@
             ).join(', ');
         }
 
+        function dynamicTalkgroupHtml(dynamicTalkgroup) {
+            if (!dynamicTalkgroup || !dynamicTalkgroup.enabled) return '';
+            const tg = dynamicTalkgroup.talkgroup;
+            const active = dynamicTalkgroup.active !== false;
+            const labelClass = active ? 'dynamic-tg-active' : 'dynamic-tg-inactive';
+            const label = active ? 'Active' : 'Inactive';
+            return `
+                <div class="repeater-meta-item" title="Current receive participation for this dynamic talkgroup">
+                    <span class="repeater-meta-label">TG${tg}:</span>
+                    <span class="${labelClass}">${label}</span>
+                </div>
+            `;
+        }
+
         function renderConnectionGroup(sectionName, countId, connections, icon) {
             const section = document.getElementById(`${sectionName}Section`);
             const container = document.getElementById(`${sectionName}Container`);
@@ -1589,6 +1626,7 @@
                 const xlateTitle = hasTranslations ? `${r.translations.length} translation rule(s) active — translated TGs are shown in gold` : '';
                 const xlateBadge = hasTranslations ? `<span title="${xlateTitle}">🔀</span> ` : '';
                 const { rf1, rf2 } = rfTgLists(r.slot1_talkgroups, r.slot2_talkgroups, r.translations);
+                const dynamicTg = r.dynamic_talkgroup;
 
                 return `
                     <div class="repeater-card" data-repeater-id="${r.repeater_id}">
@@ -1661,6 +1699,7 @@
                                     <span>None</span>
                                 </div>
                                 `}
+                                ${dynamicTalkgroupHtml(dynamicTg)}
                             </div>
                         </div>
                         
@@ -2487,9 +2526,17 @@
                     if (state.repeaters && data.repeater_id) {
                         const dynamicIdx = state.repeaters.findIndex(r => r.repeater_id == data.repeater_id);
                         if (dynamicIdx >= 0) {
+                            const dynamicTalkgroup = data.dynamic_talkgroup || {
+                                enabled: true,
+                                slot: data.slot,
+                                talkgroup: data.talkgroup,
+                                disconnect_talkgroup: data.disconnect_talkgroup,
+                                active: data.active
+                            };
                             state.repeaters[dynamicIdx] = {
                                 ...state.repeaters[dynamicIdx],
-                                dynamic_talkgroup_active: data.active
+                                dynamic_talkgroup: dynamicTalkgroup,
+                                dynamic_talkgroup_active: dynamicTalkgroup.active
                             };
                             updateRepeaters(state.repeaters);
                         }
@@ -2580,6 +2627,8 @@
                     return `Stream ended (${endReason}): ${data.packets} packets, ${data.duration}s${hangTime}`;
                 case 'hang_time_expired':
                     return `Hang time expired: Repeater ${data.repeater_id} slot ${data.slot}`;
+                case 'dynamic_talkgroup_state':
+                    return `Dynamic TG ${data.action || 'state'}: Repeater ${data.repeater_id} TG${data.talkgroup} ${data.active ? 'Active' : 'Inactive'}`;
                 default:
                     return JSON.stringify(data);
             }

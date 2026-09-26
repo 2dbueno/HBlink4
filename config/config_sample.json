@@ -40,11 +40,11 @@
     },
 
     "dynamic_talkgroups": {
-        "_comment": "Optional local TG command control. Disabled by default. When enabled, a PTT on slot/talkgroup keeps or reactivates this hotspot's receive participation; a PTT on disconnect_talkgroup disables receive for that hotspot only and is not forwarded as a normal call.",
+        "_comment": "Optional local TG command control. Disabled by default. When enabled, a PTT on slot/talkgroup joins or reactivates this hotspot's receive participation; a PTT on disconnect_talkgroup leaves receive for that hotspot only and is not forwarded as a normal call.",
         "enabled": false,
         "slot": 2,
         "talkgroup": 100,
-        "disconnect_talkgroup": 4000,
+        "disconnect_talkgroup": 4100,
         "initial_active": true
     },
 
