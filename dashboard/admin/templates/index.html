@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1">
     <title>Administration | BuenoDMR</title>
     <link rel="stylesheet" href="/static/admin.css">
+    <script src="/static/admin.js" defer></script>
 </head>
 <body>
     <main class="admin-shell">
@@ -25,10 +26,30 @@
         <section aria-labelledby="operators-title">
             <div class="section-head">
                 <h2 id="operators-title">DMR Operators</h2>
-                <span class="read-only">Read-only configuration</span>
+                <button id="add-operator" type="button">+ Add operator</button>
             </div>
-            <div class="operators">{{OPERATORS}}</div>
+            <p id="feedback" role="status" aria-live="polite"></p>
+            <div id="operators" class="operators">{{OPERATORS}}</div>
+        </section>
+        <section aria-labelledby="activity-title">
+            <h2 id="activity-title">Recent Administrative Activity</h2>
+            <ul id="activity" class="activity">{{ACTIVITY}}</ul>
         </section>
     </main>
+    <dialog id="operator-dialog">
+        <form id="operator-form">
+            <h2 id="form-title">Add operator</h2>
+            <label for="callsign">Callsign</label><input id="callsign" name="callsign" required maxlength="10" autocomplete="off">
+            <label for="base-id">Base DMR ID</label><input id="base-id" name="base_id" required inputmode="numeric" pattern="[0-9]{7}" maxlength="7">
+            <div class="form-pair">
+                <div><label for="essid-from">ESSID From</label><input id="essid-from" name="essid_from" type="number" min="0" max="99" value="0" required></div>
+                <div><label for="essid-to">ESSID To</label><input id="essid-to" name="essid_to" type="number" min="0" max="99" value="99" required></div>
+            </div>
+            <label class="check"><input id="active" name="active" type="checkbox" checked> Active</label>
+            <p id="range-preview" class="subtle">Range: -</p>
+            <div class="dialog-actions"><button id="cancel" class="secondary" type="button">Cancel</button><button id="save" type="submit">Apply</button></div>
+        </form>
+    </dialog>
+    <div id="admin-data" data-csrf="{{MUTATION_CSRF}}" hidden></div>
 </body>
 </html>

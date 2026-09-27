@@ -11,7 +11,9 @@ import pytest
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
-from dashboard.admin.operators import read_operators
+from dashboard.admin.apply import BusyError, OperatorManager
+from dashboard.admin.operators import config_matches_operators
+from hblink4.access_control import RepeaterMatcher
 from dashboard.admin.routes import router
 from dashboard.admin.security import LoginLimiter, SESSION_COOKIE, password_hash, session_digest
 from dashboard.admin.storage import AdminStore
@@ -31,6 +33,7 @@ OPERATORS = [
 def admin_site(tmp_path):
     config_path = tmp_path / "config.json"
     config_path.write_text(json.dumps({
+        "global": {"bind_ipv4": "127.0.0.1", "port_ipv4": 62031},
         "dynamic_talkgroups": {"enabled": True, "talkgroup": 100, "disconnect_talkgroup": 4100},
         "repeater_configurations": {"patterns": [
             {"name": name, "match": {"id_ranges": [[start, end]]},
@@ -48,7 +51,10 @@ def admin_site(tmp_path):
     app.state.admin_limiter = LoginLimiter()
     app.state.admin_hash_semaphore = asyncio.Semaphore(2)
     app.state.admin_dummy_hash = password_hash("dummy-password-never-used")
-    app.state.admin_hblink_config_path = config_path
+    manager = OperatorManager(store, config_path, tmp_path / "backup", restarter=SimpleNamespace(restart=lambda: None))
+    manager.initialize()
+    app.state.admin_manager = manager
+    app.state.admin_operator_error = False
     with TestClient(app) as client:
         yield client, store, config_path, original_config
 
@@ -148,40 +154,32 @@ def test_rate_limit_is_bounded_and_rejects_correct_password(admin_site):
     assert len(client.app.state.admin_limiter.attempts) <= 1024
 
 
-def test_pattern_projection_and_config_remain_read_only(admin_site):
+def test_pattern_projection_and_config_remain_unchanged_on_read(admin_site):
     client, store, config_path, original_config = admin_site
     bootstrap(store)
     assert sign_in(client).status_code == 303
-    operators = read_operators(config_path)
-    assert [(o["name"], o["base_id"], o["essid"], o["range"]) for o in operators] == [
-        (name, start // 100, "00-99", f"{start}-{end}") for name, start, end in OPERATORS
+    operators = client.get("/admin/api/operators").json()["operators"]
+    assert [(o["callsign"], o["base_id"], o["essid_from"], o["essid_to"], o["range_start"], o["range_end"]) for o in operators] == [
+        (name, start // 100, 0, 99, start, end) for name, start, end in OPERATORS
     ]
     page = client.get("/admin")
     for name, start, end in OPERATORS:
         assert name in page.text and f"{start}-{end}" in page.text
-    assert "Read-only configuration" in page.text
+    assert "Add operator" in page.text
     assert DMR_SECRET not in page.text
     assert DMR_SECRET not in json.dumps(operators)
     assert PASSWORD not in page.text
     assert config_path.read_bytes() == original_config
 
 
-def test_unusual_pattern_shows_only_escaped_match_metadata(admin_site):
+def test_config_drift_refuses_changes(admin_site):
     client, store, config_path, _ = admin_site
     config = json.loads(config_path.read_text())
-    config["repeater_configurations"]["patterns"].append({
-        "name": "<script>alert(1)</script>",
-        "match": {"ids": [312001]},
-        "config": {"passphrase": DMR_SECRET},
-    })
+    config["repeater_configurations"]["patterns"].append({"name": "BAD", "match": {"ids": [312001]}})
     config_path.write_text(json.dumps(config), encoding="utf-8")
     bootstrap(store)
     assert sign_in(client).status_code == 303
-    page = client.get("/admin")
-    assert "<script>" not in page.text
-    assert "&lt;script&gt;" in page.text
-    assert "312001" in page.text
-    assert DMR_SECRET not in page.text
+    assert client.post("/admin/api/operators", json={"callsign": "PY2ABC", "base_id": 7249999}).status_code == 403
 
 
 def test_session_survives_store_reopen_and_secure_cookie_option(admin_site, monkeypatch):
@@ -213,3 +211,149 @@ def test_cli_bootstrap_only_py2des_and_requires_explicit_rotation(admin_site, mo
     assert store.get_admin("PY2DES") is not None
     with pytest.raises(SystemExit):
         admin_cli.main(["create-admin", "--username", "PY2DES", "--dmr-id", "7242870"])
+
+
+def mutation(client, method, path, payload, csrf=None):
+    page = client.get("/admin")
+    token = re.search(r'data-csrf="([^"]+)"', page.text).group(1) if csrf is None else csrf
+    return client.request(method, path, json=payload, headers={"X-CSRF-Token": token})
+
+
+def test_crud_config_policy_and_secret_isolation(admin_site):
+    client, store, config_path, original = admin_site
+    bootstrap(store)
+    assert sign_in(client).status_code == 303
+    original_json = json.loads(original)
+    created = mutation(client, "POST", "/admin/api/operators", {"callsign": "py2abc", "base_id": 7249999})
+    assert created.status_code == 200
+    items = created.json()["operators"]
+    added = next(row for row in items if row["callsign"] == "PY2ABC")
+    assert (added["range_start"], added["range_end"]) == (724999900, 724999999)
+    oid = added["id"]
+    config = json.loads(config_path.read_text())
+    assert config["dynamic_talkgroups"] == original_json["dynamic_talkgroups"]
+    assert "default" not in config["repeater_configurations"]
+    patterns = config["repeater_configurations"]["patterns"]
+    assert len(patterns) == 5
+    assert all(p["config"] == {"passphrase": DMR_SECRET, "trust": False,
+                                "slot1_talkgroups": [], "slot2_talkgroups": [100]} for p in patterns)
+    matcher = RepeaterMatcher(config)
+    assert matcher.get_repeater_config(724999900, "PY2ABC") is not None
+    assert matcher.get_repeater_config(724999899, "PY2ABC") is None
+    assert config_matches_operators(config, store.list_operators())
+    assert len(list(client.app.state.admin_manager.backup_dir.glob("config-*.json.bak"))) == 1
+    edited = mutation(client, "PUT", f"/admin/api/operators/{oid}", {
+        "callsign": "PY2XYZ", "base_id": 7248888, "essid_from": 3, "essid_to": 5, "active": True})
+    assert edited.status_code == 200
+    assert next(row for row in edited.json()["operators"] if row["id"] == oid)["range_start"] == 724888803
+    disabled = mutation(client, "POST", f"/admin/api/operators/{oid}/disable", {})
+    assert disabled.status_code == 200
+    assert not next(row for row in disabled.json()["operators"] if row["id"] == oid)["active"]
+    assert RepeaterMatcher(json.loads(config_path.read_text())).get_repeater_config(724888803, "PY2XYZ") is None
+    enabled = mutation(client, "POST", f"/admin/api/operators/{oid}/enable", {})
+    assert enabled.status_code == 200
+    assert RepeaterMatcher(json.loads(config_path.read_text())).get_repeater_config(724888803, "PY2XYZ") is not None
+    assert mutation(client, "DELETE", f"/admin/api/operators/{oid}", {"confirm_callsign": "wrong"}).status_code == 422
+    deleted = mutation(client, "DELETE", f"/admin/api/operators/{oid}", {"confirm_callsign": "PY2XYZ"})
+    assert deleted.status_code == 200
+    assert len(deleted.json()["operators"]) == 4
+    for response in (created, edited, disabled, enabled, deleted, client.get("/admin/api/operators"), client.get("/admin/api/audit"), client.get("/admin")):
+        assert DMR_SECRET not in response.text
+    assert DMR_SECRET not in store.db_path.read_bytes().decode("latin1")
+    assert {row["callsign"] for row in store.list_operators()} == {name for name, _, _ in OPERATORS}
+    actions = [row["action"] for row in store.recent_audit(20)]
+    for action in ("operator_created", "operator_updated", "operator_disabled", "operator_enabled", "operator_deleted", "config_apply_success"):
+        assert action in actions
+
+
+@pytest.mark.parametrize("payload", [
+    {"callsign": "PY2DES", "base_id": 7249999},
+    {"callsign": "PY2ABC", "base_id": 7242870},
+    {"callsign": "PY2ABC", "base_id": 999999},
+    {"callsign": "BAD<script>", "base_id": 7249999},
+    {"callsign": "PY2ABC", "base_id": 7249999, "essid_from": 99, "essid_to": 0},
+    {"callsign": "PY2ABC", "base_id": 7249999, "essid_from": -1},
+    {"callsign": "PY2ABC", "base_id": 7249999, "trust": True},
+])
+def test_validation_leaves_config_and_db_unchanged(admin_site, payload):
+    client, store, config_path, original = admin_site
+    bootstrap(store)
+    sign_in(client)
+    assert mutation(client, "POST", "/admin/api/operators", payload).status_code == 422
+    assert config_path.read_bytes() == original
+    assert len(store.list_operators()) == 4
+
+
+def test_auth_csrf_role_and_rollback(admin_site):
+    client, store, config_path, original = admin_site
+    endpoint = "/admin/api/operators"
+    payload = {"callsign": "PY2ABC", "base_id": 7249999}
+    assert client.post(endpoint, json=payload).status_code == 401
+    bootstrap(store)
+    sign_in(client)
+    assert mutation(client, "POST", endpoint, payload, csrf="invalid").status_code == 403
+    csrf = re.search(r'data-csrf="([^"]+)"', client.get("/admin").text).group(1)
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("UPDATE admins SET role='operator' WHERE username='PY2DES'")
+    assert client.post(endpoint, json=payload, headers={"X-CSRF-Token": csrf}).status_code == 403
+    with sqlite3.connect(store.db_path) as db:
+        db.execute("UPDATE admins SET role='admin' WHERE username='PY2DES'")
+    calls = []
+    def fail():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("simulated restart failure")
+    client.app.state.admin_manager.restarter = SimpleNamespace(restart=fail)
+    response = mutation(client, "POST", endpoint, payload)
+    assert response.status_code == 503
+    assert len(calls) == 2
+    assert config_path.read_bytes() == original
+    assert len(store.list_operators()) == 4
+    assert not client.app.state.admin_manager.marker_path.exists()
+    actions = [row["action"] for row in store.recent_audit(10)]
+    assert "config_apply_failure" in actions
+
+
+def test_migration_idempotent_and_admin_independent(admin_site):
+    client, store, config_path, _ = admin_site
+    assert [(r["callsign"], r["base_id"]) for r in store.list_operators()] == [
+        (name, start // 100) for name, start, _ in OPERATORS]
+    assert store.import_operators(config_path) is False
+    assert len(store.list_operators()) == 4
+    assert DMR_SECRET not in store.db_path.read_bytes().decode("latin1")
+    bootstrap(store)
+    sign_in(client)
+    item = store.list_operators()[0]
+    assert mutation(client, "POST", f'/admin/api/operators/{item["id"]}/disable', {}).status_code == 200
+    assert store.get_admin("PY2DES")["role"] == "admin"
+    assert client.get("/admin").status_code == 200
+    assert store.import_operators(config_path) is False
+    assert len(store.list_operators()) == 4
+
+
+def test_concurrent_apply_rejected(admin_site):
+    client, store, config_path, original = admin_site
+    manager = client.app.state.admin_manager
+    manager._thread_lock.acquire()
+    try:
+        with pytest.raises(BusyError):
+            manager.apply("create", None, {"callsign": "PY2ABC", "base_id": 7249999},
+                          {"id": 1, "username": "PY2DES"})
+    finally:
+        manager._thread_lock.release()
+    assert config_path.read_bytes() == original
+    assert len(store.list_operators()) == 4
+
+
+def test_pending_apply_recovers_original_config(admin_site):
+    client, store, config_path, original = admin_site
+    manager = client.app.state.admin_manager
+    backup = manager._backup(original)
+    manager._write_marker(backup)
+    changed = json.loads(original)
+    changed["repeater_configurations"]["patterns"].pop()
+    manager._expected_config_bytes = original
+    manager._replace_config(json.dumps(changed).encode())
+    manager.initialize()
+    assert config_path.read_bytes() == original
+    assert not manager.marker_path.exists()

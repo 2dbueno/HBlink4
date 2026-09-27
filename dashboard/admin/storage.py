@@ -1,5 +1,6 @@
 """Small SQLite store for administrative identities and sessions."""
 
+import json
 import os
 import secrets
 import sqlite3
@@ -7,6 +8,8 @@ import time
 from contextlib import closing
 from datetime import datetime, timezone
 from pathlib import Path
+
+from .operators import parse_config_operators
 
 
 SESSION_LIFETIME = 8 * 60 * 60
@@ -49,8 +52,9 @@ class AdminStore:
         os.chmod(self.db_path, 0o600)
         with closing(self._connection()) as db, db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 1:
+            if version > 2:
                 raise RuntimeError("Admin database schema is newer than this dashboard")
+            db.execute("PRAGMA journal_mode = WAL")
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS admins (
                     id INTEGER PRIMARY KEY,
@@ -75,8 +79,28 @@ class AdminStore:
                     success INTEGER NOT NULL,
                     client_ip TEXT
                 );
-                PRAGMA user_version = 1;
+                CREATE TABLE IF NOT EXISTS operators (
+                    id INTEGER PRIMARY KEY,
+                    callsign TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                    base_id INTEGER NOT NULL UNIQUE,
+                    essid_from INTEGER NOT NULL CHECK (essid_from BETWEEN 0 AND 99),
+                    essid_to INTEGER NOT NULL CHECK (essid_to BETWEEN 0 AND 99),
+                    active INTEGER NOT NULL CHECK (active IN (0, 1)),
+                    created_at TEXT NOT NULL,
+                    updated_at TEXT NOT NULL,
+                    CHECK (essid_from <= essid_to)
+                );
+                CREATE TABLE IF NOT EXISTS admin_meta (
+                    key TEXT PRIMARY KEY,
+                    value TEXT NOT NULL
+                );
+                PRAGMA user_version = 2;
             """)
+            columns = {row[1] for row in db.execute("PRAGMA table_info(audit_log)")}
+            if "operator_callsign" not in columns:
+                db.execute("ALTER TABLE audit_log ADD COLUMN operator_callsign TEXT")
+            if "operator_base_id" not in columns:
+                db.execute("ALTER TABLE audit_log ADD COLUMN operator_base_id INTEGER")
 
     def _connection(self):
         db = sqlite3.connect(self.db_path, timeout=5)
@@ -140,10 +164,65 @@ class AdminStore:
         with closing(self._connection()) as db, db:
             self._audit(db, admin_id, username, action, success, client_ip)
 
+    def import_operators(self, config_path):
+        """The first import is one transaction and never repeats after deletion."""
+        with closing(self._connection()) as db, db:
+            db.execute("BEGIN IMMEDIATE")
+            initialized = db.execute(
+                "SELECT value FROM admin_meta WHERE key = 'operators_initialized'"
+            ).fetchone()
+            if initialized:
+                return False
+            if db.execute("SELECT COUNT(*) FROM operators").fetchone()[0]:
+                raise RuntimeError("Operator migration state is ambiguous")
+            with Path(config_path).open(encoding="utf-8") as source:
+                operators, _ = parse_config_operators(json.load(source))
+            now = datetime.now(timezone.utc).isoformat()
+            for item in operators:
+                db.execute("""
+                    INSERT INTO operators (callsign, base_id, essid_from, essid_to, active,
+                                           created_at, updated_at)
+                    VALUES (?, ?, ?, ?, 1, ?, ?)
+                """, (item["callsign"], item["base_id"], item["essid_from"],
+                      item["essid_to"], now, now))
+            db.execute("INSERT INTO admin_meta (key, value) VALUES ('operators_initialized', '1')")
+            return True
+
     @staticmethod
-    def _audit(db, admin_id, username, action, success, client_ip):
+    def operator_rows(db):
+        rows = db.execute("""
+            SELECT id, callsign, base_id, essid_from, essid_to, active
+            FROM operators ORDER BY id
+        """).fetchall()
+        return [{**dict(row), "active": bool(row["active"])} for row in rows]
+
+    def list_operators(self):
+        with closing(self._connection()) as db:
+            return self.operator_rows(db)
+
+    def recent_audit(self, limit=20):
+        with closing(self._connection()) as db:
+            rows = db.execute("""
+                SELECT created_at, username, action, success, operator_callsign,
+                       operator_base_id FROM audit_log ORDER BY id DESC LIMIT ?
+            """, (min(max(int(limit), 1), 50),)).fetchall()
+            return [dict(row) for row in rows]
+
+    def audit_operator(self, admin, action, success, operator=None, client_ip=None):
+        with closing(self._connection()) as db, db:
+            self._audit(db, admin["id"] if admin else None,
+                        admin["username"] if admin else None, action, success, client_ip,
+                        operator["callsign"] if operator else None,
+                        operator["base_id"] if operator else None)
+
+    @staticmethod
+    def _audit(db, admin_id, username, action, success, client_ip,
+               operator_callsign=None, operator_base_id=None):
         db.execute(
-            "INSERT INTO audit_log (created_at, admin_id, username, action, success, client_ip) VALUES (?, ?, ?, ?, ?, ?)",
-            (datetime.now(timezone.utc).isoformat(), admin_id, username, action, int(success), client_ip),
+            """INSERT INTO audit_log
+               (created_at, admin_id, username, action, success, client_ip,
+                operator_callsign, operator_base_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)""",
+            (datetime.now(timezone.utc).isoformat(), admin_id, username, action,
+             int(success), client_ip, operator_callsign, operator_base_id),
         )
         db.execute("DELETE FROM audit_log WHERE id <= (SELECT MAX(id) - 10000 FROM audit_log)")

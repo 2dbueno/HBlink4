@@ -30,10 +30,25 @@ section { padding-top: 30px; }
 .operator strong { display: block; font-size: 16px; }
 .operator small { color: #4ade80; font-size: 12px; }
 .operator-details { display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center; color: #cbd5e1; font-size: 13px; }
+.operator-actions { display: flex; flex-wrap: wrap; gap: 6px; align-items: center; }
+.operator-actions button { font-size: 12px; padding: 6px 9px; }
+.operator small { display: block; }
+.operator .status-disabled { color: #fbbf24; }
+.success { color: #4ade80; }
+#feedback:empty { display: none; }
+.activity { padding-left: 18px; color: #94a3b8; font-size: 13px; }
+.activity li { margin: 5px 0; }
+dialog { width: min(440px, calc(100% - 32px)); border: 1px solid #475569; border-radius: 8px; background: #1e293b; color: #e2e8f0; padding: 24px; }
+dialog::backdrop { background: #020617b8; }
+.form-pair { display: grid; grid-template-columns: 1fr 1fr; gap: 12px; }
+.check { display: flex; align-items: center; gap: 8px; }
+.check input { width: auto; }
+.dialog-actions { display: flex; justify-content: flex-end; gap: 8px; margin-top: 20px; }
 code { overflow-wrap: anywhere; }
 @media (max-width: 720px) {
     header, .account, .operator { align-items: flex-start; flex-direction: column; }
     .admin-shell { padding: 20px 16px 48px; }
     .operator { gap: 8px; }
     .operator-details { display: grid; gap: 3px; }
+    .section-head { align-items: flex-start; }
 }

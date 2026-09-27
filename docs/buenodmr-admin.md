@@ -1,17 +1,55 @@
-# BuenoDMR administration: phase 1
+# BuenoDMR administration
 
 The existing dashboard remains public at `/`. The separate `/admin` area requires
 an administrative account. The DMR network and the admin area use different
 credentials. A DMR callsign, base ID, ESSID, hotspot connection, and the shared
 DMR passphrase do not grant dashboard access.
 
-Phase 1 is read-only. The operator list is loaded from
-`config/config.json` (`repeater_configurations.patterns`) on each `/admin`
-request. Only the pattern name and ID matching fields are rendered. The DMR
-passphrase is never returned. Patterns representing a contiguous 9-digit
-`base + 00..99` range display the base ID and ESSID range; other patterns show
-their non-secret match fields without guessing. No browser route writes the
-HBlink4 config or restarts the HBlink4 service.
+Phase 2 manages the DMR allowlist through `/admin`. The existing administrative
+identity is independent of DMR authorization. The browser can create, edit,
+enable, disable, and delete operators, but cannot edit arbitrary JSON. Deletion
+requires explicit callsign confirmation. The public dashboard remains at `/`.
+
+## Operator persistence and migration
+
+On first startup after this update, the dashboard transactionally imports the
+existing, unambiguous `repeater_configurations.patterns` into the SQLite
+`operators` table. Import is marked complete even if the table later becomes
+empty; it is never silently repeated. If the patterns are not representable as
+single base-ID ESSID ranges with one shared passphrase and TS2/TG100 policy,
+operator management remains unavailable until an administrator resolves the
+configuration. SQLite then becomes the allowlist source of truth. External
+edits to the generated ACL cause a conflict rather than being overwritten.
+The shared DMR passphrase is never stored in SQLite or sent to the browser.
+
+Operators have a normalized callsign, seven-digit base DMR ID, ESSID bounds
+`00..99`, and an active flag. New operators default to `00..99` and active.
+Only active operators are written as patterns. The generated section has no
+`default`, `trust=false`, TS1 empty, and TS2 limited to TG100. The current
+shared passphrase stays exclusively in the real `config/config.json`; the
+private `_bueno_shared_passphrase` member retains it when the last operator is
+disabled or removed. HBlink4's matcher ignores this member. Other config
+sections, including dynamic TG100/TG4100, are preserved.
+
+## Apply and recovery
+
+Each update requires an admin session, role, and CSRF token. The dashboard
+validates all fields, checks config/DB consistency, and serializes writers
+with a process lock, file lock on Linux, and SQLite `BEGIN IMMEDIATE`. It
+validates the complete candidate with the HBlink4 repeater matcher, makes a
+timestamped backup, fsyncs a staged file, and atomically replaces the config.
+It then signals the fixed `hblink4` service process and waits for systemd's
+`Restart=always` policy to start a stable replacement. Only then does it
+commit the operator rows and audit event. A failure restores the prior config,
+restarts HBlink4 again, and rolls back SQLite. A pending marker enables
+recovery after a dashboard crash. The dashboard service and hblink4 service
+must run as the same unprivileged user; a changed unit owner or restart policy
+causes a closed failure. The browser cannot supply a service name or command.
+
+Config backups live outside Git at `~/HBlink4-backup/buenodmr-config`, mode
+`0600`; the last 20 are retained. They contain the live DMR passphrase and
+must be protected accordingly. Audit records operator actions, apply success,
+failure, and rollback with callsign and base ID, never credentials.
 
 ## First administrator
 
@@ -74,5 +112,5 @@ PY
 
 Protect the backup like an administrative credential. To restore, stop only the
 dashboard, restore the database and key together with owner-only permissions,
-and start the dashboard. `config/config.json` is separate and stays read-only
-throughout phase 1.
+and start the dashboard. Also keep the matching config backup so SQLite and
+the applied ACL can be recovered together.

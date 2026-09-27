@@ -148,6 +148,10 @@ User-focused activity log showing:
 
 ## API Endpoints
 
+The BuenoDMR `Admin` link opens `/admin`. Its authenticated operator
+management, apply/rollback procedure, and backup policy are documented in
+[BuenoDMR administration](../docs/buenodmr-admin.md).
+
 The dashboard provides REST API endpoints:
 
 ### GET /api/config

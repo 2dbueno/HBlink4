@@ -3,15 +3,17 @@
 import asyncio
 import html
 import json
+import logging
 import os
 import secrets
 from pathlib import Path
 from urllib.parse import parse_qs
 
 from fastapi import APIRouter, Request
-from fastapi.responses import HTMLResponse, RedirectResponse
+from fastapi.responses import HTMLResponse, JSONResponse, RedirectResponse
 
-from .operators import read_operators
+from .apply import ApplyError, BusyError, DriftError, OperatorManager, RollbackError
+from .operators import OperatorValidationError
 from .security import (
     LOGIN_CSRF_COOKIE, LOGIN_CSRF_LIFETIME, SESSION_COOKIE, LoginLimiter,
     csrf_digest, new_login_csrf, password_hash, password_valid, session_digest,
@@ -23,6 +25,7 @@ from .storage import AdminStore, SESSION_LIFETIME
 router = APIRouter(prefix="/admin")
 TEMPLATES = Path(__file__).parent / "templates"
 DEFAULT_CONFIG_PATH = Path(__file__).parents[2] / "config" / "config.json"
+logger = logging.getLogger(__name__)
 
 
 def initialize_admin(app):
@@ -32,6 +35,17 @@ def initialize_admin(app):
     app.state.admin_limiter = LoginLimiter()
     app.state.admin_hash_semaphore = asyncio.Semaphore(2)
     app.state.admin_dummy_hash = password_hash(secrets.token_urlsafe(32))
+    manager = OperatorManager(
+        store, DEFAULT_CONFIG_PATH, Path.home() / "HBlink4-backup" / "buenodmr-config"
+    )
+    try:
+        manager.initialize()
+    except (OperatorValidationError, ApplyError) as exc:
+        logger.error("BuenoDMR operator management unavailable: %s", type(exc).__name__)
+        app.state.admin_operator_error = True
+    else:
+        app.state.admin_manager = manager
+        app.state.admin_operator_error = False
 
 
 def _store(request):
@@ -48,7 +62,7 @@ def _response(content, status_code=200):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; style-src 'self'; img-src 'self'; "
+        "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; "
         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     )
     return response
@@ -60,7 +74,7 @@ def _redirect(url):
     return response
 
 
-def _admin(request):
+def _session_user(request):
     token = request.cookies.get(SESSION_COOKIE, "")
     if not token or len(token) > 128:
         return None
@@ -68,8 +82,55 @@ def _admin(request):
         digest = session_digest(_store(request).secret, token)
     except UnicodeError:
         return None
-    admin = _store(request).get_session_admin(digest)
-    return admin if admin and admin["role"] == "admin" else None
+    return _store(request).get_session_admin(digest)
+
+
+def _admin(request):
+    user = _session_user(request)
+    return user if user and user["role"] == "admin" else None
+
+
+def _api_admin(request):
+    user = _session_user(request)
+    if not user:
+        return None, JSONResponse({"error": "Authentication required."}, status_code=401)
+    if user["role"] != "admin":
+        return None, JSONResponse({"error": "Administrator role required."}, status_code=403)
+    if getattr(request.app.state, "admin_operator_error", False):
+        return None, JSONResponse({"error": "Operator management unavailable."}, status_code=503)
+    return user, None
+
+
+def _mutation_csrf(request):
+    token = request.cookies.get(SESSION_COOKIE, "")
+    supplied = request.headers.get("x-csrf-token", "")
+    return secrets.compare_digest(csrf_digest(_store(request).secret, "operator-mutation", token), supplied)
+
+
+def _unique_keys(pairs):
+    result = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError("Duplicate JSON key")
+        result[key] = value
+    return result
+
+
+async def _json_payload(request):
+    if not request.headers.get("content-type", "").lower().startswith("application/json"):
+        raise OperatorValidationError("Expected a JSON request.")
+    body = bytearray()
+    async for chunk in request.stream():
+        body.extend(chunk)
+        if len(body) > 8192:
+            raise OperatorValidationError("Request is too large.")
+    try:
+        data = json.loads(body.decode("utf-8"), object_pairs_hook=_unique_keys)
+    except (UnicodeError, ValueError) as exc:
+        raise OperatorValidationError("Invalid JSON request.") from exc
+    if not isinstance(data, dict):
+        raise OperatorValidationError("Expected an operator object.")
+    return data
 
 
 async def _form(request):
@@ -159,26 +220,29 @@ async def admin_home(request: Request):
     admin = _admin(request)
     if not admin:
         return _redirect("/admin/login")
-    config_path = getattr(request.app.state, "admin_hblink_config_path", DEFAULT_CONFIG_PATH)
-    try:
-        operators = read_operators(config_path)
-    except (OSError, ValueError, TypeError, KeyError):
+    if getattr(request.app.state, "admin_operator_error", False):
         return _response("Operator configuration unavailable", 503)
+    operators = request.app.state.admin_manager.list_operators()
     rows = []
     for operator in operators:
-        name = html.escape(operator["name"])
-        if operator["base_id"] is not None:
-            details = (f"<span>Base DMR ID: {operator['base_id']}</span>"
-                       f"<span>ESSID: {operator['essid']}</span>"
-                       f"<span>Range: {operator['range']}</span>")
-        else:
-            raw = html.escape(json.dumps(operator["match"], ensure_ascii=True))
-            details = f"<span>Match: <code>{raw}</code></span>"
-        rows.append(f'<article class="operator"><div><strong>{name}</strong><small>Authorized</small></div>'
-                    f'<div class="operator-details">{details}</div></article>')
+        name = html.escape(operator["callsign"])
+        state = "Active" if operator["active"] else "Disabled"
+        rows.append(
+            f'<article class="operator"><div><strong>{name}</strong><small>{state}</small></div>'
+            f'<div class="operator-details"><span>Base ID: {operator["base_id"]}</span>'
+            f'<span>ESSID: {operator["essid_from"]:02d}-{operator["essid_to"]:02d}</span>'
+            f'<span>Range: {operator["range_start"]}-{operator["range_end"]}</span></div></article>'
+        )
+    activity = []
+    for entry in _store(request).recent_audit(10):
+        detail = f' - {entry["operator_callsign"]}' if entry["operator_callsign"] else ""
+        activity.append(f'<li><time>{html.escape(entry["created_at"][:19])}</time> '
+                        f'{html.escape(entry["action"])}{html.escape(detail)}</li>')
     template = (TEMPLATES / "index.html").read_text(encoding="utf-8")
     page = (template.replace("{{USERNAME}}", html.escape(admin["username"]))
             .replace("{{OPERATORS}}", "".join(rows) or "<p>No configured patterns.</p>")
+            .replace("{{ACTIVITY}}", "".join(activity))
+            .replace("{{MUTATION_CSRF}}", csrf_digest(_store(request).secret, "operator-mutation", request.cookies[SESSION_COOKIE]))
             .replace("{{CSRF}}", csrf_digest(_store(request).secret, "logout", request.cookies[SESSION_COOKIE])))
     return _response(page)
 
@@ -197,3 +261,72 @@ async def logout(request: Request):
     response = _redirect("/admin/login")
     response.delete_cookie(SESSION_COOKIE, path="/admin")
     return response
+
+
+@router.get("/api/operators")
+async def list_operators(request: Request):
+    _, error = _api_admin(request)
+    if error:
+        return error
+    return JSONResponse({"operators": request.app.state.admin_manager.list_operators()},
+                        headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/audit")
+async def recent_activity(request: Request):
+    _, error = _api_admin(request)
+    if error:
+        return error
+    return JSONResponse({"events": _store(request).recent_audit(20)},
+                        headers={"Cache-Control": "no-store"})
+
+
+async def _operator_mutation(request, action, operator_id=None):
+    admin, error = _api_admin(request)
+    if error:
+        return error
+    if not _mutation_csrf(request):
+        return JSONResponse({"error": "Invalid CSRF token."}, status_code=403)
+    try:
+        payload = await _json_payload(request)
+        operators = await asyncio.to_thread(
+            request.app.state.admin_manager.apply, action, operator_id, payload,
+            admin, _client_ip(request),
+        )
+        return JSONResponse({"message": "Configuration applied successfully.",
+                             "operators": operators}, headers={"Cache-Control": "no-store"})
+    except OperatorValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    except (BusyError, DriftError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except RollbackError:
+        logger.error("BuenoDMR configuration rollback requires attention")
+        return JSONResponse({"error": "Configuration recovery requires operator attention."}, status_code=503)
+    except ApplyError:
+        return JSONResponse({"error": "Failed to apply configuration. Previous configuration restored."},
+                            status_code=503)
+
+
+@router.post("/api/operators")
+async def create_operator(request: Request):
+    return await _operator_mutation(request, "create")
+
+
+@router.put("/api/operators/{operator_id}")
+async def update_operator(operator_id: int, request: Request):
+    return await _operator_mutation(request, "update", operator_id)
+
+
+@router.post("/api/operators/{operator_id}/enable")
+async def enable_operator(operator_id: int, request: Request):
+    return await _operator_mutation(request, "enable", operator_id)
+
+
+@router.post("/api/operators/{operator_id}/disable")
+async def disable_operator(operator_id: int, request: Request):
+    return await _operator_mutation(request, "disable", operator_id)
+
+
+@router.delete("/api/operators/{operator_id}")
+async def delete_operator(operator_id: int, request: Request):
+    return await _operator_mutation(request, "delete", operator_id)
