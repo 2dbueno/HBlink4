@@ -62,7 +62,7 @@ def _response(content, status_code=200):
     response.headers["Referrer-Policy"] = "no-referrer"
     response.headers["X-Content-Type-Options"] = "nosniff"
     response.headers["Content-Security-Policy"] = (
-        "default-src 'none'; style-src 'self'; script-src 'self'; img-src 'self'; "
+        "default-src 'none'; style-src 'self'; script-src 'self'; connect-src 'self'; img-src 'self'; "
         "form-action 'self'; base-uri 'none'; frame-ancestors 'none'"
     )
     return response

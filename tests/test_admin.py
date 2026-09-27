@@ -172,6 +172,50 @@ def test_pattern_projection_and_config_remain_unchanged_on_read(admin_site):
     assert config_path.read_bytes() == original_config
 
 
+def test_browser_admin_api_contract_and_csp(admin_site):
+    client, store, _, _ = admin_site
+    bootstrap(store)
+    assert sign_in(client).status_code == 303
+    page = client.get("/admin")
+    assert page.status_code == 200
+    csp = page.headers["content-security-policy"]
+    assert "default-src 'none'" in csp
+    assert "script-src 'self'" in csp
+    assert "connect-src 'self'" in csp
+    assert '/static/admin.js?v=2' in page.text
+    token = re.search(r'data-csrf="([^"]+)"', page.text).group(1)
+    assert token
+
+    from dashboard import server as dashboard_module
+    atexit.unregister(dashboard_module.save_persistent_data)
+    asset = TestClient(dashboard_module.app).get("/static/admin.js?v=2")
+    assert asset.status_code == 200
+    assert 'apiRequest("/admin/api/operators")' in asset.text
+    assert '"X-CSRF-Token": csrf' in asset.text
+    assert 'credentials: "same-origin"' in asset.text
+
+    response = client.get("/admin/api/operators")
+    assert response.status_code == 200
+    operators = response.json()["operators"]
+    assert [row["callsign"] for row in operators] == [name for name, _, _ in OPERATORS]
+    assert all(type(row["id"]) is int and row["id"] > 0 for row in operators)
+    assert DMR_SECRET not in response.text
+    first = operators[0]
+    assert client.post(f'/admin/api/operators/{first["id"]}/disable', json={},
+                       headers={"X-CSRF-Token": "invalid"}).json() == {"error": "Invalid CSRF token."}
+    invalid = client.post("/admin/api/operators", json={"callsign": "BAD", "base_id": 123},
+                          headers={"X-CSRF-Token": token})
+    assert invalid.status_code == 422 and "error" in invalid.json()
+    assert client.get("/admin/api/audit").status_code == 200
+
+
+def test_operator_api_requires_live_session(admin_site):
+    client, _, _, _ = admin_site
+    assert client.get("/admin/api/operators").status_code == 401
+    assert client.post("/admin/api/operators", json={"callsign": "PY2ABC", "base_id": 7249999},
+                       headers={"X-CSRF-Token": "invalid"}).status_code == 401
+
+
 def test_config_drift_refuses_changes(admin_site):
     client, store, config_path, _ = admin_site
     config = json.loads(config_path.read_text())
@@ -306,6 +350,7 @@ def test_auth_csrf_role_and_rollback(admin_site):
     client.app.state.admin_manager.restarter = SimpleNamespace(restart=fail)
     response = mutation(client, "POST", endpoint, payload)
     assert response.status_code == 503
+    assert response.json() == {"error": "Failed to apply configuration. Previous configuration restored."}
     assert len(calls) == 2
     assert config_path.read_bytes() == original
     assert len(store.list_operators()) == 4

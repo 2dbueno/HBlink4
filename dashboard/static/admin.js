@@ -8,6 +8,42 @@ const csrf = document.getElementById("admin-data").dataset.csrf;
 let operators = [];
 let editing = null;
 
+async function apiRequest(url, method = "GET", payload = null) {
+    const options = {method, credentials: "same-origin"};
+    if (payload !== null) {
+        options.headers = {"Content-Type": "application/json", "X-CSRF-Token": csrf};
+        options.body = JSON.stringify(payload);
+    }
+    let response;
+    try {
+        response = await fetch(url, options);
+    } catch (_) {
+        throw new Error("Network request failed. Check the dashboard connection and retry.");
+    }
+    let data;
+    try {
+        data = await response.json();
+    } catch (_) {
+        data = null;
+    }
+    if (!response.ok) {
+        const fallback = {
+            401: "Session expired. Sign in again.",
+            403: "Access denied or CSRF token invalid. Refresh and retry.",
+            404: "Admin API endpoint not found.",
+            409: "Configuration conflict. Refresh and retry.",
+            422: "Invalid operator data.",
+            500: "Dashboard internal error. No change confirmed.",
+            503: "Configuration update unavailable."
+        };
+        const serverMessage = data && typeof data.error === "string" ? data.error.slice(0, 300) : "";
+        throw new Error(response.status >= 500 && response.status !== 503
+            ? fallback[500] : serverMessage || fallback[response.status] || `Request failed (HTTP ${response.status}).`);
+    }
+    if (!data || typeof data !== "object") throw new Error("Invalid response from dashboard API.");
+    return data;
+}
+
 function showFeedback(message, error = false) {
     feedback.textContent = message;
     feedback.className = error ? "error" : "success";
@@ -75,16 +111,14 @@ function openForm(item = null) {
 
 async function request(url, method, payload) {
     showFeedback("Applying configuration...");
-    const response = await fetch(url, {method, credentials: "same-origin", headers: {"Content-Type": "application/json", "X-CSRF-Token": csrf}, body: JSON.stringify(payload)});
-    const data = await response.json();
-    if (!response.ok) throw new Error(data.error || "Configuration update failed.");
+    const data = await apiRequest(url, method, payload);
     operators = data.operators;
     render();
     showFeedback(data.message);
     try {
-        const audit = await fetch("/admin/api/audit", {credentials: "same-origin"});
-        if (audit.ok) {
-            const events = (await audit.json()).events;
+        const audit = await apiRequest("/admin/api/audit");
+        if (Array.isArray(audit.events)) {
+            const events = audit.events;
             const activity = document.getElementById("activity");
             activity.replaceChildren();
             for (const event of events) {
@@ -122,6 +156,8 @@ form.addEventListener("submit", async (event) => {
     catch (error) { showFeedback(error.message, true); dialog.close(); }
 });
 
-fetch("/admin/api/operators", {credentials: "same-origin"}).then((response) => response.json().then((data) => {
-    if (response.ok) { operators = data.operators; render(); }
-})).catch(() => showFeedback("Could not refresh operators.", true));
+apiRequest("/admin/api/operators").then((data) => {
+    if (!Array.isArray(data.operators)) throw new Error("Invalid operator list from dashboard API.");
+    operators = data.operators;
+    render();
+}).catch((error) => showFeedback(error.message, true));
