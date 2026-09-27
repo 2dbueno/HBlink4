@@ -2,6 +2,9 @@
 
 Real-time monitoring dashboard for HBlink4 DMR server with modern look and feel.
 
+BuenoDMR's separate, read-only administrative area is documented in
+[BuenoDMR administration](../docs/buenodmr-admin.md).
+
 ## Features
 
 - **Real-time Updates**: WebSocket-based live updates every second (no page refreshes required)

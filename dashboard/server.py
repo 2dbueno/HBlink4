@@ -31,12 +31,14 @@ if __package__ in (None, ""):
     import dashboard  # noqa: F401  (parent package must be in sys.modules)
 
 from .user_db import UserDatabase, compute_next_refresh_seconds, _age_str
+from .admin.routes import router as admin_router, initialize_admin
 
 # Configure logging
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
 app = FastAPI(title="HBlink4 Dashboard", version="1.1.0")
+app.include_router(admin_router)
 
 # Load dashboard configuration
 def load_config() -> dict:
@@ -1191,7 +1193,7 @@ async def dashboard():
     html_path = Path(__file__).parent / 'static' / 'dashboard.html'
     if not html_path.exists():
         return HTMLResponse("<h1>Dashboard HTML not found</h1><p>Please create dashboard/static/dashboard.html</p>", status_code=404)
-    with open(html_path) as f:
+    with open(html_path, encoding='utf-8') as f:
         return HTMLResponse(f.read())
 
 
@@ -1204,6 +1206,7 @@ if static_path.exists():
 @app.on_event("startup")
 async def startup_event():
     """Start event receiver on startup"""
+    initialize_admin(app)
     receiver_config = dashboard_config.get('event_receiver', {})
 
     # These are bind addresses -- hblink4 connects in to us. They were once named
