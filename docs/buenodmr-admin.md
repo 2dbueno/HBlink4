@@ -51,6 +51,27 @@ Config backups live outside Git at `~/HBlink4-backup/buenodmr-config`, mode
 must be protected accordingly. Audit records operator actions, apply success,
 failure, and rollback with callsign and base ID, never credentials.
 
+## Strict Hotspot Access
+
+The Admin page shows the current server-side HBP classification for connected
+clients and exposes **Acesso exclusivo por Hotspot**. BuenoDMR defaults this
+policy to enabled. Enabling requires a connected HBlink4 process and every
+current HBP session to classify as `hotspot`; `unknown`, network, or repeater
+profiles block activation. A change requires an Admin session, CSRF token, and
+exact `ATIVAR` or `DESATIVAR` confirmation. It updates only
+`connection_type_detection.strict_hotspot_access`, persists a mirror in
+`admin_meta`, backs up the config, restarts HBlink4, and restores the previous
+config if application fails. Active DMR clients may reconnect during this
+restart.
+
+The accepted `hotspot` label is derived from RPTC Package ID / Software ID
+metadata supplied by each client. It is an operational filter, not proof of
+physical hotspot hardware; a compatible client that knows a valid DMR identity
+and passphrase can imitate those strings. The policy does not affect public
+browser access. Rejection events record timestamp, repeater ID, validated
+callsign when available, classification, and a fixed reason, without IP or
+authentication material. See [DMR access checks and origin limits](radio-access-security.md).
+
 ## First administrator
 
 Install `requirements-dashboard.txt` into the dashboard's existing virtual

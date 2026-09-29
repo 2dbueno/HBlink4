@@ -2066,24 +2066,31 @@ class HBProtocol(asyncio.DatagramProtocol):
         except Exception as e:
             LOGGER.error(f'Error processing datagram from {ip}:{port}: {str(e)}')
 
-    def _validate_repeater(self, repeater_id: bytes, addr: PeerAddress) -> Optional[RepeaterState]:
+    def _validate_repeater(self, repeater_id: bytes, addr: PeerAddress,
+                           include_pending: bool = False) -> Optional[RepeaterState]:
         """Validate repeater state and address"""
-        if repeater_id not in self._repeaters:
+        repeater = self._repeaters.get(repeater_id)
+        if repeater is None:
+            pending = self._pending_logins.get(repeater_id) if include_pending else None
+            if pending is not None and pending.sockaddr == normalize_addr(addr):
+                return pending
             # Per-packet logging - only enable for heavy troubleshooting
             #LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} not found in _repeaters dict')
             self._send_nak(repeater_id, addr, reason="Repeater not registered")
             return None
-            
-        repeater = self._repeaters[repeater_id]
+
         # Per-packet logging - only enable for heavy troubleshooting
         #LOGGER.debug(f'Validating repeater {rid_to_int(repeater_id)}: state="{repeater.connection_state}", stored_addr={repeater.sockaddr}, incoming_addr={addr}')
-        
-        if not self._addr_matches_repeater(repeater, addr):
-            LOGGER.warning(f'Message from wrong IP for repeater {rid_to_int(repeater_id)}')
-            self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
-            return None
-            
-        return repeater
+        if self._addr_matches_repeater(repeater, addr):
+            return repeater
+
+        pending = self._pending_logins.get(repeater_id) if include_pending else None
+        if pending is not None and pending.sockaddr == normalize_addr(addr):
+            return pending
+
+        LOGGER.warning(f'Message from wrong IP for repeater {rid_to_int(repeater_id)}')
+        self._send_nak(repeater_id, addr, reason="Message from incorrect IP address")
+        return None
     
     def _handle_data_stream(self, source_key: str, owner_id: bytes,
                             rf_src: bytes, dst_id: bytes, slot: int,
@@ -2930,7 +2937,6 @@ class HBProtocol(asyncio.DatagramProtocol):
         sockaddr. Only a correct passphrase earns the takeover; on every failure the
         pending state is discarded and the incumbent registration is left untouched.
         """
-        del self._pending_logins[repeater_id]
         ip, port = addr[0], addr[1]
 
         try:
@@ -2938,6 +2944,7 @@ class HBProtocol(asyncio.DatagramProtocol):
                 rid_to_int(repeater_id), pending.get_callsign_str()
             )
             if repeater_config is None:
+                self._pending_logins.pop(repeater_id, None)
                 LOGGER.warning(f'Denied takeover of repeater {rid_to_int(repeater_id)} by {ip}:{port} '
                                f'- no matching configuration; incumbent retained')
                 self._send_nak(repeater_id, addr, reason="No matching configuration")
@@ -2946,29 +2953,22 @@ class HBProtocol(asyncio.DatagramProtocol):
             salt_bytes = pending.salt.to_bytes(4, 'big')
             calc_hash = bytes.fromhex(sha256(b''.join([salt_bytes, repeater_config.passphrase.encode()])).hexdigest())
             if auth_hash != calc_hash:
+                self._pending_logins.pop(repeater_id, None)
                 LOGGER.warning(f'Denied takeover of repeater {rid_to_int(repeater_id)} by {ip}:{port} '
                                f'- authentication failed; incumbent retained')
                 self._send_nak(repeater_id, addr, reason="Authentication failed")
                 return
 
-            # Passphrase proven. Now — and only now — the incumbent gives way.
-            # Order matters: _remove_repeater deletes by ID, so the old entry must
-            # go before the claimant is installed under the same key.
-            incumbent = self._repeaters.get(repeater_id)
-            if incumbent is not None:
-                old_addr = incumbent.sockaddr
-                LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated from {ip}:{port} - '
-                            f'replacing registration from {old_addr[0]}:{old_addr[1]}')
-                self._remove_repeater(repeater_id, "replaced_by_new_address")
-                self._send_nak(repeater_id, old_addr, reason="Replaced by new registration")
-
+            # Keep the incumbent registration until the authenticated claimant
+            # has supplied a valid RPTC and passed the configured admission
+            # policy. A rejected metadata profile must not evict a live hotspot.
             pending.authenticated = True
             pending.connection_state = 'config'
-            self._repeaters[repeater_id] = pending
             self._send_packet(b''.join([RPTACK, repeater_id]), addr)
             LOGGER.info(f'Repeater {rid_to_int(repeater_id)} authenticated successfully from {ip}:{port}')
 
         except Exception as e:
+            self._pending_logins.pop(repeater_id, None)
             LOGGER.error(f'Authentication error for repeater {rid_to_int(repeater_id)} from {ip}:{port}: {str(e)}')
             self._send_nak(repeater_id, addr)
 
@@ -3021,11 +3021,43 @@ class HBProtocol(asyncio.DatagramProtocol):
             self._send_nak(repeater_id, addr)
             self._remove_repeater(repeater_id, "auth_error")
 
+    def _strict_hotspot_access_enabled(self) -> bool:
+        detection = self._config.get('connection_type_detection', {})
+        value = detection.get('strict_hotspot_access', True) if isinstance(detection, dict) else True
+        # Only an explicit JSON false disables the default-on policy. Invalid or
+        # absent values fail closed.
+        return value is not False
+
+    def _emit_client_admission_rejected(self, repeater_id: bytes,
+                                        repeater: RepeaterState,
+                                        classification: str, reason: str) -> None:
+        callsign = repeater.get_callsign_str().strip()
+        if callsign and not re.fullmatch(r'[A-Za-z0-9/-]{1,16}', callsign):
+            callsign = ''
+        self._events.emit('client_admission_rejected', {
+            'repeater_id': rid_to_int(repeater_id),
+            'callsign': callsign or None,
+            'classification': classification,
+            'reason': reason,
+        })
+
+    def _reject_config_session(self, repeater_id: bytes, repeater: RepeaterState,
+                               addr: PeerAddress, classification: str,
+                               reason: str) -> None:
+        self._send_nak(repeater_id, addr, reason=reason)
+        self._emit_client_admission_rejected(repeater_id, repeater, classification, reason)
+        if self._pending_logins.get(repeater_id) is repeater:
+            # A rejected takeover claimant never replaces or removes the
+            # incumbent registration held in _repeaters.
+            self._pending_logins.pop(repeater_id, None)
+        else:
+            self._remove_repeater(repeater_id, reason)
+
     def _handle_config(self, data: bytes, addr: PeerAddress) -> None:
         """Handle configuration from repeater"""
         try:
             repeater_id = data[4:8]
-            repeater = self._validate_repeater(repeater_id, addr)
+            repeater = self._validate_repeater(repeater_id, addr, include_pending=True)
             if not repeater or not repeater.authenticated or repeater.connection_state != 'config':
                 LOGGER.warning(f'Config from repeater {rid_to_int(repeater_id)} in wrong state')
                 self._send_nak(repeater_id, addr)
@@ -3038,12 +3070,12 @@ class HBProtocol(asyncio.DatagramProtocol):
             # malformed packet from another address cannot remove its owner.
             if len(data) != 302:
                 LOGGER.warning(
-                    'Rejecting malformed RPTC from %s:%s for repeater %s '
-                    '(length=%s, expected=302)',
-                    addr[0], addr[1], rid_to_int(repeater_id), len(data),
+                    'Rejecting malformed RPTC for repeater %s (length=%s, expected=302)',
+                    rid_to_int(repeater_id), len(data),
                 )
-                self._send_nak(repeater_id, addr, reason='Invalid RPTC length')
-                self._remove_repeater(repeater_id, 'malformed_config')
+                self._reject_config_session(
+                    repeater_id, repeater, addr, 'unknown', 'invalid_rptc_length'
+                )
                 return
                 
             # Store raw bytes for metadata
@@ -3066,6 +3098,18 @@ class HBProtocol(asyncio.DatagramProtocol):
             repeater.connection_type = detect_connection_type(
                 repeater.software_id, repeater.package_id, self._config
             )
+
+            if (self._strict_hotspot_access_enabled()
+                    and repeater.connection_type != 'hotspot'):
+                LOGGER.warning(
+                    'Rejecting repeater %s after RPTC admission check (classification=%s)',
+                    rid_to_int(repeater_id), repeater.connection_type,
+                )
+                self._reject_config_session(
+                    repeater_id, repeater, addr, repeater.connection_type,
+                    'profile_not_allowed',
+                )
+                return
             
             # Log detailed configuration at debug level
             LOGGER.debug(f'Repeater {rid_to_int(repeater_id)} config:'
@@ -3078,6 +3122,17 @@ class HBProtocol(asyncio.DatagramProtocol):
                       f'\n    Software: {repeater.software_id.decode().strip()}'
                       f'\n    Package: {repeater.package_id.decode().strip()}'
                       f'\n    Type: {repeater.connection_type}')
+
+            if self._pending_logins.get(repeater_id) is repeater:
+                incumbent = self._repeaters.get(repeater_id)
+                if incumbent is not None:
+                    old_addr = incumbent.sockaddr
+                    self._remove_repeater(repeater_id, 'replaced_by_new_address')
+                    self._send_nak(
+                        repeater_id, old_addr, reason='Replaced by admitted registration'
+                    )
+                self._pending_logins.pop(repeater_id, None)
+                self._repeaters[repeater_id] = repeater
 
             repeater.connected = True
             repeater.connection_state = 'connected'

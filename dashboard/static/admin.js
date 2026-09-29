@@ -4,6 +4,8 @@ const list = document.getElementById("operators");
 const dialog = document.getElementById("operator-dialog");
 const form = document.getElementById("operator-form");
 const feedback = document.getElementById("feedback");
+const accessFeedback = document.getElementById("access-feedback");
+const accessStatus = document.getElementById("radio-access-status");
 const csrf = document.getElementById("admin-data").dataset.csrf;
 let operators = [];
 let editing = null;
@@ -143,10 +145,73 @@ function formatAuditAction(action) {
         operator_deleted: "operador excluído",
         config_apply_success: "configuração aplicada",
         config_apply_failure: "falha ao aplicar configuração",
-        config_rollback: "configuração revertida"
+        config_rollback: "configuração revertida",
+        hotspot_access_enabled: "acesso exclusivo por Hotspot ativado",
+        hotspot_access_disabled: "acesso exclusivo por Hotspot desativado",
+        client_admission_rejected: "cliente recusado na admissão"
     };
     return labels[action] || action;
 }
+
+function showAccessFeedback(message, error = false) {
+    accessFeedback.textContent = message;
+    accessFeedback.className = error ? "error" : "success";
+}
+
+function renderRadioAccess(data) {
+    accessStatus.textContent = data.enabled ? "ATIVADO" : "DESATIVADO";
+    accessStatus.dataset.state = data.enabled ? "enabled" : "disabled";
+    document.getElementById("enable-hotspot-access").disabled = data.enabled || !data.ready_to_enable;
+    document.getElementById("disable-hotspot-access").disabled = !data.enabled;
+
+    const clients = document.getElementById("access-clients");
+    clients.replaceChildren();
+    if (!Array.isArray(data.clients) || data.clients.length === 0) {
+        const empty = document.createElement("li");
+        empty.textContent = data.hblink_connected ? "Nenhum cliente HBP conectado para validar." : "HBlink4 sem conexão com a dashboard.";
+        clients.append(empty);
+        return;
+    }
+    for (const client of data.clients.slice(0, 100)) {
+        const row = document.createElement("li");
+        const title = document.createElement("strong");
+        title.textContent = `${client.callsign || "Sem indicativo"} · ID ${client.repeater_id ?? "—"} · ${(client.connection_type || "unknown").toUpperCase()}`;
+        row.append(title);
+        const details = document.createElement("div");
+        details.textContent = `Software: ${client.software_id || "—"} · Package: ${client.package_id || "—"}`;
+        row.append(details);
+        clients.append(row);
+    }
+}
+
+async function refreshRadioAccess() {
+    try {
+        renderRadioAccess(await apiRequest("/admin/api/radio-access"));
+    } catch (error) {
+        accessStatus.textContent = "INDISPONÍVEL";
+        accessStatus.dataset.state = "disabled";
+        showAccessFeedback(error.message, true);
+    }
+}
+
+async function setRadioAccess(enabled) {
+    const verb = enabled ? "ATIVAR" : "DESATIVAR";
+    if (!window.confirm(`${verb} o acesso exclusivo por Hotspot? O serviço HBlink4 será reiniciado; conexões DMR ativas cairão e poderão reconectar.`)) return;
+    showAccessFeedback("Aplicando política e aguardando o HBlink4...");
+    document.getElementById("enable-hotspot-access").disabled = true;
+    document.getElementById("disable-hotspot-access").disabled = true;
+    try {
+        await apiRequest("/admin/api/radio-access", "POST", {enabled, confirmation: verb});
+        showAccessFeedback(`Acesso exclusivo por Hotspot ${enabled ? "ativado" : "desativado"}.`);
+        await refreshRadioAccess();
+    } catch (error) {
+        showAccessFeedback(error.message, true);
+        await refreshRadioAccess();
+    }
+}
+
+document.getElementById("enable-hotspot-access").addEventListener("click", () => setRadioAccess(true));
+document.getElementById("disable-hotspot-access").addEventListener("click", () => setRadioAccess(false));
 
 async function perform(item, action) {
     if (action === "edit") return openForm(item);
@@ -179,3 +244,4 @@ apiRequest("/admin/api/operators").then((data) => {
     operators = data.operators;
     render();
 }).catch((error) => showFeedback(error.message, true));
+refreshRadioAccess();

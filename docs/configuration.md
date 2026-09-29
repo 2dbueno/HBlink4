@@ -306,6 +306,7 @@ The `connection_type_detection` section configures how connected devices are cat
 ```json
 {
     "connection_type_detection": {
+        "strict_hotspot_access": true,
         "description": "Categorize connections for dashboard display...",
         "hotspot_packages": [
             "mmdvm_hs", "dvmega", "zumspot", "jumbospot", "nanodv",
@@ -329,6 +330,7 @@ The `connection_type_detection` section configures how connected devices are cat
 
 | Setting | Type | Description |
 |---------|------|-------------|
+| `strict_hotspot_access` | boolean | Require an authenticated, structurally valid RPTC client classified as `hotspot` before it becomes connected; defaults to `true` in BuenoDMR. Only literal `false` disables the policy; missing or invalid values fail closed |
 | `hotspot_packages` | array | Package ID substrings that identify hotspots |
 | `network_packages` | array | Package ID substrings that identify network links |
 | `repeater_packages` | array | Package ID substrings that identify repeaters |
@@ -346,6 +348,15 @@ The `connection_type_detection` section configures how connected devices are cat
 - **Substring matching** is used (`mmdvm_hs` matches `MMDVM_MMDVM_HS_Dual_Hat`)
 - Network patterns are checked first, then hotspots, then repeaters
 - Generic `MMDVM` (exact match) defaults to repeater
+
+The `hotspot` category is a heuristic over client-supplied RPTC metadata, not
+hardware attestation. Strict Hotspot Access applies this category server-side
+after allowlist/ESSID and RPTK authentication, before the session becomes
+connected. Unknown metadata is denied while strict mode is enabled. Admin can
+toggle the flag through the authenticated, CSRF-protected control; the setting
+is persisted in this configuration and SQLite metadata, with backup and
+rollback around the HBlink4 restart. See [DMR access checks and origin limits](radio-access-security.md)
+for protocol fields, observed live values, and limitations.
 
 ### Common Package IDs
 

@@ -44,6 +44,16 @@ class RollbackError(ApplyError):
     pass
 
 
+RADIO_ACCESS_META_KEY = "strict_hotspot_access"
+
+
+def strict_hotspot_access_value(config):
+    section = config.get("connection_type_detection", {})
+    value = section.get("strict_hotspot_access", True) if isinstance(section, dict) else True
+    # Invalid values must not silently disable the default-on admission policy.
+    return value is not False
+
+
 def _fsync_dir(path):
     if hasattr(os, "O_DIRECTORY"):
         fd = os.open(path, os.O_RDONLY | os.O_DIRECTORY)
@@ -128,14 +138,19 @@ class OperatorManager:
         with self._locked():
             self.store.import_operators(self.config_path)
             self._recover_pending()
-            if not config_matches_operators(self._config(), self.store.list_operators()):
+            current = self._config()
+            if not config_matches_operators(current, self.store.list_operators()):
                 raise DriftError("Operator database and HBlink4 config differ.")
+            self._initialize_access_policy_meta(current)
 
-    def _write_marker(self, backup):
+    def _write_marker(self, backup, radio_access=None):
         fd, temp = tempfile.mkstemp(prefix="apply-marker-", suffix=".tmp", dir=self.store.data_dir)
         try:
             with os.fdopen(fd, "w", encoding="utf-8") as dest:
-                json.dump({"backup": str(backup)}, dest)
+                marker = {"backup": str(backup)}
+                if radio_access is not None:
+                    marker["radio_access"] = radio_access
+                json.dump(marker, dest)
                 dest.flush()
                 os.fchmod(dest.fileno(), 0o600)
                 os.fsync(dest.fileno())
@@ -155,6 +170,31 @@ class OperatorManager:
         backup = pathlib.Path(marker["backup"])
         if backup.resolve().parent != self.backup_dir.resolve() or not backup.name.startswith("config-"):
             raise RollbackError("Invalid pending backup path.")
+        if "radio_access" in marker:
+            policy = marker["radio_access"]
+            previous = policy.get("previous")
+            target = policy.get("target")
+            if type(previous) is not bool or type(target) is not bool:
+                raise RollbackError("Invalid pending radio access policy.")
+            current = strict_hotspot_access_value(self._config())
+            stored_value = self.store.get_meta(RADIO_ACCESS_META_KEY)
+            stored = (stored_value == "enabled") if stored_value in ("enabled", "disabled") else previous
+            if current == target and stored == target:
+                self._clear_marker()
+                return
+            if current == previous and stored == previous:
+                self._clear_marker()
+                return
+            self._expected_config_bytes = self.config_path.read_bytes()
+            self._replace_config(backup.read_bytes())
+            self.restarter.restart()
+            restored = strict_hotspot_access_value(self._config())
+            if (not config_matches_operators(self._config(), self.store.list_operators())
+                    or restored != stored):
+                raise RollbackError("Recovery did not restore the previous radio access policy.")
+            self.store.audit(None, None, "config_rollback", True, None)
+            self._clear_marker()
+            return
         if config_matches_operators(self._config(), self.store.list_operators()):
             self._clear_marker()
             return
@@ -164,6 +204,20 @@ class OperatorManager:
         if not config_matches_operators(self._config(), self.store.list_operators()):
             raise RollbackError("Recovery did not restore the previous ACL.")
         self._clear_marker()
+
+    def _initialize_access_policy_meta(self, config):
+        enabled = strict_hotspot_access_value(config)
+        stored = self.store.get_meta(RADIO_ACCESS_META_KEY)
+        expected = "enabled" if enabled else "disabled"
+        if stored is None:
+            with closing(self.store._connection()) as db, db:
+                self.store.set_meta(db, RADIO_ACCESS_META_KEY, expected)
+        elif stored != expected:
+            raise DriftError("Radio access policy database and HBlink4 config differ.")
+
+    def radio_access_status(self):
+        return {"enabled": strict_hotspot_access_value(self._config()),
+                "allowed_profiles": ["hotspot"]}
 
     def _backup(self, original):
         self.backup_dir.mkdir(mode=0o700, parents=True, exist_ok=True)
@@ -277,6 +331,99 @@ class OperatorManager:
                     # A committed change is already live; recovery clears the marker.
                     pass
                 return self.list_operators()
+
+    def apply_radio_access_policy(self, enabled, admin, client_ip=None):
+        """Change only the strict HBP profile flag using the config rollback path."""
+        if type(enabled) is not bool:
+            raise OperatorValidationError("Access policy must be enabled or disabled.")
+        with self._locked():
+            with closing(self.store._connection()) as db:
+                try:
+                    db.execute("PRAGMA busy_timeout = 0")
+                    db.execute("BEGIN IMMEDIATE")
+                except sqlite3.OperationalError as exc:
+                    raise BusyError("Configuration update already in progress.") from exc
+                backup = None
+                original = None
+                committed = False
+                previous = None
+                action = "hotspot_access_enabled" if enabled else "hotspot_access_disabled"
+                try:
+                    current = self._config()
+                    existing = self.store.operator_rows(db)
+                    if not config_matches_operators(current, existing):
+                        raise DriftError("Operator database and HBlink4 config differ.")
+                    previous = strict_hotspot_access_value(current)
+                    stored_row = db.execute(
+                        "SELECT value FROM admin_meta WHERE key = ?",
+                        (RADIO_ACCESS_META_KEY,),
+                    ).fetchone()
+                    stored = stored_row["value"] if stored_row else None
+                    expected_stored = "enabled" if previous else "disabled"
+                    if stored not in (None, expected_stored):
+                        raise DriftError("Radio access policy database and HBlink4 config differ.")
+                    if previous is enabled:
+                        raise OperatorValidationError("Acesso exclusivo por Hotspot já está nesse estado.")
+
+                    original = self.config_path.read_bytes()
+                    self._expected_config_bytes = original
+                    if json.loads(original) != current:
+                        raise DriftError("HBlink4 config changed during update.")
+                    candidate = json.loads(original)
+                    detection = candidate.get("connection_type_detection")
+                    if detection is None:
+                        detection = {}
+                        candidate["connection_type_detection"] = detection
+                    if not isinstance(detection, dict):
+                        raise DriftError("Connection type detection config is invalid.")
+                    detection["strict_hotspot_access"] = enabled
+                    candidate_bytes = json.dumps(candidate, indent=2, ensure_ascii=False).encode("utf-8")
+                    backup = self._backup(original)
+                    self._write_marker(backup, {
+                        "previous": previous,
+                        "target": enabled,
+                    })
+                    self._replace_config(candidate_bytes)
+                    self.store.set_meta(db, RADIO_ACCESS_META_KEY,
+                                        "enabled" if enabled else "disabled")
+                    self.restarter.restart()
+                    self.store._audit(db, admin["id"], admin["username"], action,
+                                      True, client_ip)
+                    db.commit()
+                    committed = True
+                except BaseException as exc:
+                    if committed:
+                        raise
+                    db.rollback()
+                    rolled_back = False
+                    if (backup is not None and original is not None
+                            and self.config_path.read_bytes() != original):
+                        try:
+                            self._expected_config_bytes = self.config_path.read_bytes()
+                            self._replace_config(backup.read_bytes())
+                            self.restarter.restart()
+                            rolled_back = True
+                        except BaseException as restore_exc:
+                            self.store.audit(admin["id"], admin["username"], action, False, client_ip)
+                            self.store.audit(admin["id"], admin["username"], "config_apply_failure", False, client_ip)
+                            self.store.audit(admin["id"], admin["username"], "config_rollback", False, client_ip)
+                            raise RollbackError("Config restore or HBlink4 recovery failed.") from restore_exc
+                    if self.marker_path.exists():
+                        self._clear_marker()
+                    if not isinstance(exc, (OperatorValidationError, DriftError, BusyError)):
+                        self.store.audit(admin["id"], admin["username"], action, False, client_ip)
+                        self.store.audit(admin["id"], admin["username"], "config_apply_failure", False, client_ip)
+                        if rolled_back:
+                            self.store.audit(admin["id"], admin["username"], "config_rollback", True, client_ip)
+                    if isinstance(exc, (OperatorValidationError, DriftError, BusyError)):
+                        raise
+                    raise ApplyError("Falha ao aplicar a política. A configuração anterior foi restaurada.") from exc
+            try:
+                self._clear_marker()
+                self._prune_backups()
+            except OSError:
+                pass
+            return {"enabled": enabled, "allowed_profiles": ["hotspot"]}
 
     @staticmethod
     def _propose(action, operator_id, payload, existing):

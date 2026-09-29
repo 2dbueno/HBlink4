@@ -52,7 +52,7 @@ class AdminStore:
         os.chmod(self.db_path, 0o600)
         with closing(self._connection()) as db, db:
             version = db.execute("PRAGMA user_version").fetchone()[0]
-            if version > 2:
+            if version > 3:
                 raise RuntimeError("Admin database schema is newer than this dashboard")
             db.execute("PRAGMA journal_mode = WAL")
             db.executescript("""
@@ -94,13 +94,19 @@ class AdminStore:
                     key TEXT PRIMARY KEY,
                     value TEXT NOT NULL
                 );
-                PRAGMA user_version = 2;
             """)
             columns = {row[1] for row in db.execute("PRAGMA table_info(audit_log)")}
             if "operator_callsign" not in columns:
                 db.execute("ALTER TABLE audit_log ADD COLUMN operator_callsign TEXT")
             if "operator_base_id" not in columns:
                 db.execute("ALTER TABLE audit_log ADD COLUMN operator_base_id INTEGER")
+            if "repeater_id" not in columns:
+                db.execute("ALTER TABLE audit_log ADD COLUMN repeater_id INTEGER")
+            if "classification" not in columns:
+                db.execute("ALTER TABLE audit_log ADD COLUMN classification TEXT")
+            if "reason" not in columns:
+                db.execute("ALTER TABLE audit_log ADD COLUMN reason TEXT")
+            db.execute("PRAGMA user_version = 3")
 
     def _connection(self):
         db = sqlite3.connect(self.db_path, timeout=5)
@@ -164,6 +170,31 @@ class AdminStore:
         with closing(self._connection()) as db, db:
             self._audit(db, admin_id, username, action, success, client_ip)
 
+    def get_meta(self, key):
+        with closing(self._connection()) as db:
+            row = db.execute("SELECT value FROM admin_meta WHERE key = ?", (key,)).fetchone()
+            return row["value"] if row else None
+
+    @staticmethod
+    def set_meta(db, key, value):
+        db.execute("""
+            INSERT INTO admin_meta (key, value) VALUES (?, ?)
+            ON CONFLICT(key) DO UPDATE SET value = excluded.value
+        """, (key, value))
+
+    def record_client_admission_rejected(self, repeater_id, callsign,
+                                         classification, reason, created_at=None):
+        with closing(self._connection()) as db, db:
+            db.execute(
+                """INSERT INTO audit_log
+                   (created_at, action, success, operator_callsign, repeater_id,
+                    classification, reason)
+                   VALUES (?, 'client_admission_rejected', 0, ?, ?, ?, ?)""",
+                (created_at or datetime.now(timezone.utc).isoformat(), callsign,
+                 repeater_id, classification, reason),
+            )
+            db.execute("DELETE FROM audit_log WHERE id <= (SELECT MAX(id) - 10000 FROM audit_log)")
+
     def import_operators(self, config_path):
         """The first import is one transaction and never repeats after deletion."""
         with closing(self._connection()) as db, db:
@@ -204,7 +235,8 @@ class AdminStore:
         with closing(self._connection()) as db:
             rows = db.execute("""
                 SELECT created_at, username, action, success, operator_callsign,
-                       operator_base_id FROM audit_log ORDER BY id DESC LIMIT ?
+                       operator_base_id, repeater_id, classification, reason
+                FROM audit_log ORDER BY id DESC LIMIT ?
             """, (min(max(int(limit), 1), 50),)).fetchall()
             return [dict(row) for row in rows]
 

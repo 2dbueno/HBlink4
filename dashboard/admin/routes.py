@@ -129,7 +129,7 @@ async def _json_payload(request):
     except (UnicodeError, ValueError) as exc:
         raise OperatorValidationError("Invalid JSON request.") from exc
     if not isinstance(data, dict):
-        raise OperatorValidationError("Expected an operator object.")
+        raise OperatorValidationError("Expected a JSON object.")
     return data
 
 
@@ -179,7 +179,34 @@ def _audit_label(action):
         "config_apply_success": "configuração aplicada",
         "config_apply_failure": "falha ao aplicar configuração",
         "config_rollback": "configuração revertida",
+        "hotspot_access_enabled": "acesso exclusivo por Hotspot ativado",
+        "hotspot_access_disabled": "acesso exclusivo por Hotspot desativado",
+        "client_admission_rejected": "cliente recusado na admissão",
     }.get(action, action)
+
+
+def _radio_access_snapshot(request):
+    observer = getattr(request.app.state, "radio_access_observer", None)
+    try:
+        observed = observer() if observer else None
+    except Exception:
+        observed = None
+    if not isinstance(observed, dict):
+        observed = {"hblink_connected": False, "clients": []}
+    clients = observed.get("clients")
+    if not isinstance(clients, list):
+        clients = []
+    status = request.app.state.admin_manager.radio_access_status()
+    ready = (observed.get("hblink_connected") is True and bool(clients)
+             and all(isinstance(client, dict)
+                     and client.get("connection_type") == "hotspot"
+                     for client in clients))
+    return {
+        **status,
+        "hblink_connected": observed.get("hblink_connected") is True,
+        "clients": clients,
+        "ready_to_enable": ready,
+    }
 
 
 @router.get("/login")
@@ -296,6 +323,53 @@ async def recent_activity(request: Request):
         return error
     return JSONResponse({"events": _store(request).recent_audit(20)},
                         headers={"Cache-Control": "no-store"})
+
+
+@router.get("/api/radio-access")
+async def radio_access_status(request: Request):
+    _, error = _api_admin(request)
+    if error:
+        return error
+    return JSONResponse(_radio_access_snapshot(request), headers={"Cache-Control": "no-store"})
+
+
+@router.post("/api/radio-access")
+async def update_radio_access(request: Request):
+    admin, error = _api_admin(request)
+    if error:
+        return error
+    if not _mutation_csrf(request):
+        return JSONResponse({"error": "Invalid CSRF token."}, status_code=403)
+    try:
+        payload = await _json_payload(request)
+        if set(payload) != {"enabled", "confirmation"} or type(payload["enabled"]) is not bool:
+            raise OperatorValidationError("Invalid access policy request.")
+        expected_confirmation = "ATIVAR" if payload["enabled"] else "DESATIVAR"
+        if payload["confirmation"] != expected_confirmation:
+            raise OperatorValidationError("Confirmação ausente ou inválida.")
+        if payload["enabled"] and not _radio_access_snapshot(request)["ready_to_enable"]:
+            return JSONResponse({
+                "error": "Ativação exige HBlink4 conectado e todas as conexões atuais classificadas como hotspot."
+            }, status_code=409)
+        result = await asyncio.to_thread(
+            request.app.state.admin_manager.apply_radio_access_policy,
+            payload["enabled"], admin, _client_ip(request),
+        )
+        broadcaster = getattr(request.app.state, "public_snapshot_broadcaster", None)
+        if broadcaster:
+            await broadcaster()
+        return JSONResponse({"message": "Política de acesso atualizada.", **result},
+                            headers={"Cache-Control": "no-store"})
+    except OperatorValidationError as exc:
+        return JSONResponse({"error": str(exc)}, status_code=422)
+    except (BusyError, DriftError) as exc:
+        return JSONResponse({"error": str(exc)}, status_code=409)
+    except RollbackError:
+        logger.error("BuenoDMR radio access rollback requires attention")
+        return JSONResponse({"error": "A recuperação da política exige atenção do administrador."}, status_code=503)
+    except ApplyError:
+        return JSONResponse({"error": "Falha ao aplicar a política. A configuração anterior foi restaurada."},
+                            status_code=503)
 
 
 async def _operator_mutation(request, action, operator_id=None):

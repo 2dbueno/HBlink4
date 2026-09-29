@@ -360,6 +360,120 @@ def test_auth_csrf_role_and_rollback(admin_site):
     assert "config_apply_failure" in actions
 
 
+def test_radio_access_policy_admin_toggle_persistence_and_audit(admin_site):
+    client, store, config_path, original = admin_site
+    bootstrap(store)
+    assert client.get("/admin/api/radio-access").status_code == 401
+    assert sign_in(client).status_code == 303
+
+    observed = {"hblink_connected": True, "clients": [{
+        "repeater_id": 724287002, "callsign": "PY2DES", "connection_type": "hotspot",
+        "software_id": "20260911_WPSD", "package_id": "MMDVM_MMDVM_HS_Dual_Hat",
+    }]}
+    client.app.state.radio_access_observer = lambda: observed
+    status = client.get("/admin/api/radio-access")
+    assert status.status_code == 200
+    assert status.json()["enabled"] is True
+    assert status.json()["allowed_profiles"] == ["hotspot"]
+    assert status.json()["ready_to_enable"] is True
+    assert status.json()["clients"][0]["package_id"] == "MMDVM_MMDVM_HS_Dual_Hat"
+
+    # Exact CSRF and explicit confirmation are required for either direction.
+    assert client.post("/admin/api/radio-access", json={"enabled": False,
+        "confirmation": "DESATIVAR"}).status_code == 403
+    disabled = mutation(client, "POST", "/admin/api/radio-access", {
+        "enabled": False, "confirmation": "ATIVAR"})
+    assert disabled.status_code == 422
+    disabled = mutation(client, "POST", "/admin/api/radio-access", {
+        "enabled": False, "confirmation": "DESATIVAR"})
+    assert disabled.status_code == 200
+    changed = json.loads(config_path.read_text())
+    assert changed["connection_type_detection"]["strict_hotspot_access"] is False
+    assert store.get_meta("strict_hotspot_access") == "disabled"
+    assert {(row["callsign"], row["base_id"], row["essid_from"], row["essid_to"], row["active"])
+            for row in store.list_operators()} == {
+        (name, start // 100, 0, 99, True) for name, start, _ in OPERATORS
+    }
+
+    observed["clients"][0]["connection_type"] = "unknown"
+    refused = mutation(client, "POST", "/admin/api/radio-access", {
+        "enabled": True, "confirmation": "ATIVAR"})
+    assert refused.status_code == 409
+    assert json.loads(config_path.read_text())["connection_type_detection"]["strict_hotspot_access"] is False
+
+    observed["clients"][0]["connection_type"] = "hotspot"
+    enabled = mutation(client, "POST", "/admin/api/radio-access", {
+        "enabled": True, "confirmation": "ATIVAR"})
+    assert enabled.status_code == 200 and enabled.json()["enabled"] is True
+    assert json.loads(config_path.read_text())["connection_type_detection"]["strict_hotspot_access"] is True
+    actions = [row["action"] for row in store.recent_audit(20)]
+    assert "hotspot_access_disabled" in actions
+    assert "hotspot_access_enabled" in actions
+    assert config_path.read_bytes() != original
+    assert DMR_SECRET not in client.get("/admin/api/radio-access").text
+
+
+def test_radio_access_toggle_restores_policy_on_restart_failure(admin_site):
+    client, store, config_path, original = admin_site
+    bootstrap(store)
+    sign_in(client)
+    client.app.state.radio_access_observer = lambda: {
+        "hblink_connected": True,
+        "clients": [{"connection_type": "hotspot", "callsign": "PY2DES"}],
+    }
+    calls = []
+
+    def fail_once():
+        calls.append(1)
+        if len(calls) == 1:
+            raise RuntimeError("simulated restart failure")
+
+    client.app.state.admin_manager.restarter = SimpleNamespace(restart=fail_once)
+    response = mutation(client, "POST", "/admin/api/radio-access", {
+        "enabled": False, "confirmation": "DESATIVAR"})
+    assert response.status_code == 503
+    assert len(calls) == 2
+    assert config_path.read_bytes() == original
+    assert store.get_meta("strict_hotspot_access") == "enabled"
+    assert not client.app.state.admin_manager.marker_path.exists()
+    actions = [row["action"] for row in store.recent_audit(10)]
+    assert "hotspot_access_disabled" in actions
+    assert "config_apply_failure" in actions
+    assert "config_rollback" in actions
+
+
+def test_pending_radio_access_apply_recovers_previous_policy(admin_site):
+    client, store, config_path, original = admin_site
+    manager = client.app.state.admin_manager
+    backup = manager._backup(original)
+    manager._write_marker(backup, {"previous": True, "target": False})
+    candidate = json.loads(original)
+    candidate["connection_type_detection"] = {"strict_hotspot_access": False}
+    manager._expected_config_bytes = original
+    manager._replace_config(json.dumps(candidate).encode())
+
+    manager.initialize()
+
+    assert config_path.read_bytes() == original
+    assert store.get_meta("strict_hotspot_access") == "enabled"
+    assert not manager.marker_path.exists()
+
+
+def test_client_admission_audit_is_sanitized(admin_site):
+    _, store, _, _ = admin_site
+    store.record_client_admission_rejected(
+        724287002, "PY2DES", "unknown", "profile_not_allowed",
+        "2026-09-29T12:00:00+00:00",
+    )
+    row = store.recent_audit(1)[0]
+    assert row["action"] == "client_admission_rejected"
+    assert row["repeater_id"] == 724287002
+    assert row["operator_callsign"] == "PY2DES"
+    assert row["classification"] == "unknown"
+    assert row["reason"] == "profile_not_allowed"
+    assert "client_ip" not in row and "passphrase" not in row
+
+
 def test_migration_idempotent_and_admin_independent(admin_site):
     client, store, config_path, _ = admin_site
     assert [(r["callsign"], r["base_id"]) for r in store.list_operators()] == [

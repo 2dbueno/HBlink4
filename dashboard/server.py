@@ -503,6 +503,33 @@ def build_public_snapshot():
     }
 
 
+def _radio_metadata_text(value, limit=64):
+    if not isinstance(value, str):
+        return ""
+    return "".join(ch for ch in value.replace("\x00", "") if ch.isprintable()).strip()[:limit]
+
+
+def build_radio_access_observation():
+    """Return only the live HBP profile fields needed by the private Admin UI."""
+    clients = []
+    for repeater_id, repeater in state.repeaters.items():
+        if repeater.get("status") != "connected":
+            continue
+        callsign = _public_callsign(repeater.get("callsign")) or ""
+        category = repeater.get("connection_type")
+        if category not in {"hotspot", "repeater", "network", "unknown"}:
+            category = "unknown"
+        clients.append({
+            "repeater_id": repeater_id if isinstance(repeater_id, int) else None,
+            "callsign": callsign,
+            "connection_type": category,
+            "software_id": _radio_metadata_text(repeater.get("software_id")),
+            "package_id": _radio_metadata_text(repeater.get("package_id")),
+        })
+    clients.sort(key=lambda item: (item["callsign"], item["repeater_id"] or 0))
+    return {"hblink_connected": state.hblink_connected, "clients": clients[:100]}
+
+
 async def _broadcast_public_snapshot():
     if not state.public_websocket_clients:
         return
@@ -859,6 +886,31 @@ class EventReceiver:
                 'received_at': event['timestamp']
             }
             logger.debug(f"Repeater details received: {data['repeater_id']} - Pattern: {data.get('matched_pattern', 'Unknown')}")
+
+        elif event_type == 'client_admission_rejected':
+            store = getattr(app.state, "admin_store", None)
+            repeater_id = data.get("repeater_id")
+            classification = data.get("classification")
+            reason = data.get("reason")
+            callsign = _public_callsign(data.get("callsign"))
+            allowed_classes = {"hotspot", "repeater", "network", "unknown"}
+            allowed_reasons = {"profile_not_allowed", "invalid_rptc_length"}
+            if (store and type(repeater_id) is int and 0 < repeater_id <= 0xFFFFFFFF
+                    and classification in allowed_classes and reason in allowed_reasons):
+                timestamp = event.get("timestamp")
+                if isinstance(timestamp, (int, float)):
+                    try:
+                        created_at = datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")
+                    except (OverflowError, OSError, ValueError):
+                        created_at = None
+                else:
+                    created_at = None
+                try:
+                    store.record_client_admission_rejected(
+                        repeater_id, callsign, classification, reason, created_at
+                    )
+                except Exception as exc:
+                    logger.warning("Admission audit unavailable: %s", type(exc).__name__)
         
         elif event_type == 'repeater_options_updated':
             # RPTO received - update TG lists in real-time
@@ -1405,6 +1457,7 @@ async def startup_event():
     """Start event receiver on startup"""
     initialize_admin(app)
     app.state.public_snapshot_broadcaster = _broadcast_public_snapshot
+    app.state.radio_access_observer = build_radio_access_observation
     _start_public_site_listener()
     receiver_config = dashboard_config.get('event_receiver', {})
 

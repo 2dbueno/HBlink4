@@ -16,6 +16,7 @@ PASSPHRASE = "rptc-framing-test-key"
 CONFIG = {
     "global": {"user_cache": {"timeout": 600}},
     "dashboard": {"enabled": False},
+    "connection_type_detection": {"strict_hotspot_access": True},
     "repeater_configurations": {
         "patterns": [{
             "name": "RPTC test network",
@@ -47,10 +48,17 @@ def hb_protocol(monkeypatch):
     return protocol
 
 
-def make_rptc(length=302):
+def make_rptc(length=302, *, software_id=b"20260911_WPSD",
+              package_id=b"MMDVM_MMDVM_HS_Dual_Hat"):
     """Return the fixed RPTC fields padded to the requested wire length."""
-    fixed = b"RPTC" + RADIO_ID + b"W1AW    "
-    return fixed + (b" " * (length - len(fixed)))
+    packet = bytearray(b" " * length)
+    packet[:16] = b"RPTC" + RADIO_ID + b"W1AW    "
+    software_width = max(0, min(40, length - 222))
+    packet[222:222 + software_width] = software_id[:software_width].ljust(software_width, b" ")
+    if length > 262:
+        package_width = length - 262
+        packet[262:] = package_id[:package_width].ljust(package_width, b" ")
+    return bytes(packet)
 
 
 def install_config_session(protocol, address=OWNER, *, authenticated=True,
@@ -86,6 +94,7 @@ def test_authenticated_rptc_of_exactly_302_bytes_connects(hb_protocol):
     assert state.connected is True
     assert state.callsign == b"W1AW    "
     assert state.package_id == packet[262:302]
+    assert state.connection_type == "hotspot"
     assert hb_protocol.transport.sent[-1] == (b"RPTACK" + RADIO_ID, OWNER)
 
 
@@ -130,3 +139,61 @@ def test_authenticated_rptc_in_wrong_state_cannot_connect_or_remove_session(hb_p
     assert state.connected is False
     assert state.callsign == b""
     assert hb_protocol.transport.sent[-1] == (MSTNAK + RADIO_ID, OWNER)
+
+
+@pytest.mark.parametrize(
+    ("software_id", "package_id", "expected"),
+    [
+        (b"20260911_WPSD", b"MMDVM_HBlink", "network"),
+        (b"", b"", "unknown"),
+    ],
+)
+def test_strict_hotspot_mode_rejects_non_hotspot_and_unknown_metadata(
+    hb_protocol, software_id, package_id, expected
+):
+    state = install_config_session(hb_protocol)
+    emitted = []
+    hb_protocol._events.emit = lambda event_type, data: emitted.append((event_type, data))
+
+    hb_protocol._handle_config(
+        make_rptc(software_id=software_id, package_id=package_id), OWNER
+    )
+
+    assert RADIO_ID not in hb_protocol._repeaters
+    assert state.connection_state == "config" and not state.connected
+    assert hb_protocol.transport.sent[-1] == (MSTNAK + RADIO_ID, OWNER)
+    event_type, audit = next(
+        (event_type, data) for event_type, data in emitted
+        if event_type == "client_admission_rejected"
+    )
+    assert event_type == "client_admission_rejected"
+    assert audit == {
+        "repeater_id": int.from_bytes(RADIO_ID, "big"),
+        "callsign": "W1AW",
+        "classification": expected,
+        "reason": "profile_not_allowed",
+    }
+    assert "address" not in audit and "passphrase" not in audit
+
+
+def test_strict_disabled_preserves_allowlist_auth_and_accepts_other_class(hb_protocol):
+    hb_protocol._config = {"connection_type_detection": {"strict_hotspot_access": False}}
+    state = install_config_session(hb_protocol)
+
+    hb_protocol._handle_config(make_rptc(package_id=b"MMDVM_HBlink"), OWNER)
+
+    assert hb_protocol._repeaters[RADIO_ID] is state
+    assert state.connection_state == "connected" and state.connected
+    assert state.connection_type == "network"
+
+
+def test_dmrd_before_config_admission_never_creates_voice_stream(hb_protocol):
+    state = install_config_session(hb_protocol, connection_state="config")
+    packet = bytearray(55)
+    packet[:4] = b"DMRD"
+    packet[11:15] = RADIO_ID
+
+    hb_protocol._handle_dmr_data(bytes(packet), OWNER)
+
+    assert state.connection_state == "config"
+    assert state.get_slot_stream(1) is None and state.get_slot_stream(2) is None

@@ -32,11 +32,21 @@
             <div id="operators" class="operators">{{OPERATORS}}</div>
         </section>
         <section aria-labelledby="radio-access-title">
-            <h2 id="radio-access-title">Controles de acesso DMR</h2>
+            <h2 id="radio-access-title">Acesso exclusivo por Hotspot</h2>
             <article class="security-note" aria-labelledby="radio-access-title">
-                <strong class="security-status">Ativos</strong>
-                <p>O HBlink4 valida a lista de operadores, o desafio de senha, a sessão autenticada e seu endereço de origem, além das regras de timeslot e grupo de conversação.</p>
-                <p>O protocolo HomeBrew DMR não comprova o hardware físico. Um cliente com ID autorizado e a senha pode imitar um hotspot; os metadados de software no RPTC são informados pelo próprio cliente.</p>
+                <strong id="radio-access-status" class="security-status">Carregando estado</strong>
+                <p>Quando ativado, somente clientes HBP classificados pelo perfil aprovado podem completar a conexão.</p>
+                <p><strong>Perfil permitido:</strong> <code>hotspot</code>. O HBlink4 usa Package ID do RPTC e, como fallback, Software ID; as conexões atuais aparecem abaixo para conferência.</p>
+                <p>Esses campos são fornecidos pelo cliente. A classificação é uma regra operacional, não uma prova criptográfica de hardware físico.</p>
+                <div class="access-controls">
+                    <button id="enable-hotspot-access" type="button">Ativar</button>
+                    <button id="disable-hotspot-access" class="secondary" type="button">Desativar</button>
+                </div>
+                <p id="access-feedback" role="status" aria-live="polite"></p>
+                <div class="access-profile">
+                    <strong>Clientes conectados e perfil observado</strong>
+                    <ul id="access-clients"><li>Carregando conexões HBP...</li></ul>
+                </div>
             </article>
         </section>
         <section aria-labelledby="activity-title">
