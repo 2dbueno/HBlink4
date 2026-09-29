@@ -86,7 +86,8 @@ def test_protected_admin_and_public_dashboard(admin_site):
     dashboard_app = dashboard_module.app
     public_client = TestClient(dashboard_app)
     assert public_client.get("/").status_code == 200
-    assert public_client.get("/api/stats").status_code == 200
+    assert public_client.get("/api/stats").status_code == 404
+    assert public_client.get("/api/public/snapshot").status_code == 200
 
 
 def test_login_session_logout_and_audit(admin_site):
@@ -94,7 +95,7 @@ def test_login_session_logout_and_audit(admin_site):
     bootstrap(store)
     invalid = sign_in(client, "wrong-password")
     assert invalid.status_code == 401
-    assert "Invalid username or password" in invalid.text
+    assert "Usuário ou senha inválidos." in invalid.text
     assert client.get("/admin", follow_redirects=False).status_code == 303
 
     success = sign_in(client)
@@ -165,7 +166,7 @@ def test_pattern_projection_and_config_remain_unchanged_on_read(admin_site):
     page = client.get("/admin")
     for name, start, end in OPERATORS:
         assert name in page.text and f"{start}-{end}" in page.text
-    assert "Add operator" in page.text
+    assert "Adicionar operador" in page.text
     assert DMR_SECRET not in page.text
     assert DMR_SECRET not in json.dumps(operators)
     assert PASSWORD not in page.text
