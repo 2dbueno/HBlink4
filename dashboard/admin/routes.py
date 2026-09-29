@@ -165,6 +165,23 @@ def _client_ip(request):
     return (request.client.host if request.client else "unknown")[:128]
 
 
+def _audit_label(action):
+    return {
+        "admin_bootstrap": "administração inicial",
+        "admin_login_failure": "falha de entrada",
+        "admin_login_success": "entrada realizada",
+        "admin_logout": "saída realizada",
+        "operator_created": "operador adicionado",
+        "operator_updated": "operador atualizado",
+        "operator_enabled": "operador ativado",
+        "operator_disabled": "operador desativado",
+        "operator_deleted": "operador excluído",
+        "config_apply_success": "configuração aplicada",
+        "config_apply_failure": "falha ao aplicar configuração",
+        "config_rollback": "configuração revertida",
+    }.get(action, action)
+
+
 @router.get("/login")
 async def login_page(request: Request):
     if _admin(request):
@@ -179,7 +196,7 @@ async def login(request: Request):
     csrf = form.get("csrf", "") if form else ""
     if not valid_login_csrf(store.secret, request.cookies.get(LOGIN_CSRF_COOKIE), csrf):
         store.audit(None, None, "admin_login_failure", False, _client_ip(request))
-        return _login_page(request, "Invalid form. Please try again.", 403)
+        return _login_page(request, "Formulário inválido. Tente novamente.", 403)
 
     username = form.get("username", "").strip().upper()[:64]
     password = form.get("password", "")
@@ -187,7 +204,7 @@ async def login(request: Request):
     limiter = request.app.state.admin_limiter
     if limiter.limited(ip, username):
         store.audit(None, username, "admin_login_failure", False, ip)
-        return _login_page(request, "Too many attempts. Try again later.", 429)
+        return _login_page(request, "Muitas tentativas. Aguarde e tente novamente.", 429)
     limiter.failure(ip, username)
     admin = store.get_admin(username) if username else None
     if len(password) > 1024:
@@ -199,7 +216,7 @@ async def login(request: Request):
             valid = await asyncio.to_thread(password_valid, admin["password_hash"] if admin else dummy_hash, password)
     if not admin or not valid or admin["role"] != "admin":
         store.audit(admin["id"] if admin else None, username, "admin_login_failure", False, ip)
-        return _login_page(request, "Invalid username or password.", 401)
+        return _login_page(request, "Usuário ou senha inválidos.", 401)
 
     limiter.success(ip, username)
     token = secrets.token_urlsafe(32)
@@ -226,21 +243,21 @@ async def admin_home(request: Request):
     rows = []
     for operator in operators:
         name = html.escape(operator["callsign"])
-        state = "Active" if operator["active"] else "Disabled"
+        state = "Ativo" if operator["active"] else "Desativado"
         rows.append(
             f'<article class="operator"><div><strong>{name}</strong><small>{state}</small></div>'
-            f'<div class="operator-details"><span>Base ID: {operator["base_id"]}</span>'
+            f'<div class="operator-details"><span>ID base: {operator["base_id"]}</span>'
             f'<span>ESSID: {operator["essid_from"]:02d}-{operator["essid_to"]:02d}</span>'
-            f'<span>Range: {operator["range_start"]}-{operator["range_end"]}</span></div></article>'
+            f'<span>Faixa: {operator["range_start"]}-{operator["range_end"]}</span></div></article>'
         )
     activity = []
     for entry in _store(request).recent_audit(10):
         detail = f' - {entry["operator_callsign"]}' if entry["operator_callsign"] else ""
         activity.append(f'<li><time>{html.escape(entry["created_at"][:19])}</time> '
-                        f'{html.escape(entry["action"])}{html.escape(detail)}</li>')
+                        f'{html.escape(_audit_label(entry["action"]))}{html.escape(detail)}</li>')
     template = (TEMPLATES / "index.html").read_text(encoding="utf-8")
     page = (template.replace("{{USERNAME}}", html.escape(admin["username"]))
-            .replace("{{OPERATORS}}", "".join(rows) or "<p>No configured patterns.</p>")
+            .replace("{{OPERATORS}}", "".join(rows) or "<p>Nenhum operador configurado.</p>")
             .replace("{{ACTIVITY}}", "".join(activity))
             .replace("{{MUTATION_CSRF}}", csrf_digest(_store(request).secret, "operator-mutation", request.cookies[SESSION_COOKIE]))
             .replace("{{CSRF}}", csrf_digest(_store(request).secret, "logout", request.cookies[SESSION_COOKIE])))
@@ -293,6 +310,9 @@ async def _operator_mutation(request, action, operator_id=None):
             request.app.state.admin_manager.apply, action, operator_id, payload,
             admin, _client_ip(request),
         )
+        broadcaster = getattr(request.app.state, "public_snapshot_broadcaster", None)
+        if broadcaster:
+            await broadcaster()
         return JSONResponse({"message": "Configuration applied successfully.",
                              "operators": operators}, headers={"Cache-Control": "no-store"})
     except OperatorValidationError as exc:
