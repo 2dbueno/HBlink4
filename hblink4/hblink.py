@@ -3030,6 +3030,21 @@ class HBProtocol(asyncio.DatagramProtocol):
                 LOGGER.warning(f'Config from repeater {rid_to_int(repeater_id)} in wrong state')
                 self._send_nak(repeater_id, addr)
                 return
+
+            # Homebrew RPTC has a fixed 302-byte wire format. Do not mark a
+            # truncated/extended config connected: the fields below are fixed
+            # offset slices and incomplete metadata must not be accepted as a
+            # completed repeater registration. Validate the session first so a
+            # malformed packet from another address cannot remove its owner.
+            if len(data) != 302:
+                LOGGER.warning(
+                    'Rejecting malformed RPTC from %s:%s for repeater %s '
+                    '(length=%s, expected=302)',
+                    addr[0], addr[1], rid_to_int(repeater_id), len(data),
+                )
+                self._send_nak(repeater_id, addr, reason='Invalid RPTC length')
+                self._remove_repeater(repeater_id, 'malformed_config')
+                return
                 
             # Store raw bytes for metadata
             repeater.callsign = data[8:16]

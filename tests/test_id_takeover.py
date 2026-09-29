@@ -494,7 +494,7 @@ class ReconnectReportingTestCase(unittest.TestCase):
         state.connection_state = 'config'
         self.hb._repeaters[RADIO_ID] = state
 
-        config_packet = b'RPTC' + RADIO_ID + b'W1AW    ' + (b' ' * 294)
+        config_packet = b'RPTC' + RADIO_ID + b'W1AW    ' + (b' ' * 286)
         self.hb._handle_config(config_packet, CLAIMANT)
 
         self.assertEqual(state.connection_state, 'connected')
