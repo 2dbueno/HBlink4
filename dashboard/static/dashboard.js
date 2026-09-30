@@ -2,7 +2,7 @@
   'use strict';
 
   const SNAPSHOT_URL = '/api/public/snapshot';
-  const MAX_ACTIVITY = 6;
+  const MAX_ACTIVITY = 12;
   const MAX_OPERATORS = 24;
   const MAX_HOTSPOTS = 36;
   const model = { snapshot: null, activity: [], socket: null, reconnectTimer: null, retryDelay: 2000, connected: false, connectionInterrupted: false };
@@ -54,14 +54,6 @@
     el(id).textContent = numberText(value) ?? fallback;
   }
 
-  function activityDescription(item) {
-    const kind = safeText(item.kind, 32).toLowerCase();
-    if (kind === 'voice' || kind === 'transmission' || kind === 'stream_start' || kind === 'talkgroup_activity') return 'Transmissão na TG100';
-    if (kind.includes('connect') || kind === 'hotspot_joined') return 'Hotspot conectado';
-    if (kind.includes('disconnect') || kind === 'hotspot_left') return 'Hotspot desconectado';
-    return 'Atividade na TG100';
-  }
-
   function timestampValue(value) {
     if (typeof value === 'number' && Number.isFinite(value)) return value > 1e12 ? value : value * 1000;
     if (typeof value === 'string') {
@@ -89,6 +81,26 @@
     node.className = className;
     node.textContent = message;
     container.replaceChildren(node);
+  }
+
+  function formatDuration(value) {
+    const seconds = Math.max(0, Math.floor(Number(value) || 0));
+    const minutes = Math.floor(seconds / 60);
+    return minutes ? `${minutes}:${String(seconds % 60).padStart(2, '0')}` : `${seconds} s`;
+  }
+
+  function speakerLabel(speaker) {
+    const callsign = safeText(speaker && speaker.callsign, 24);
+    const radioId = numberText(speaker && speaker.dmr_id);
+    return callsign || (radioId ? `DMR ${radioId}` : 'Emissor não identificado');
+  }
+
+  function ingressLabel(ingress) {
+    const callsign = safeText(ingress && ingress.callsign, 24);
+    const repeaterId = numberText(ingress && ingress.repeater_id);
+    const essid = safeText(ingress && ingress.essid, 2);
+    return [callsign || 'Ponto de acesso', repeaterId ? `ID ${repeaterId}` : '', essid ? `ESSID ${essid}` : '']
+      .filter(Boolean).join(' · ');
   }
 
   function renderMetrics(snapshot) {
@@ -149,38 +161,86 @@
     container.replaceChildren(...cards);
   }
 
+  function renderActiveTransmissions(items) {
+    const container = el('activeTransmissionList');
+    const list = Array.isArray(items) ? items.filter((item) => item && typeof item === 'object').slice(0, 36) : [];
+    container.setAttribute('aria-busy', 'false');
+    if (!list.length) {
+      setEmpty(container, model.connected ? 'Nenhuma transmissão em andamento.' : 'As transmissões aparecerão quando a conexão voltar.', model.connected ? 'empty-state' : 'error-state');
+      return;
+    }
+    const cards = list.map((item) => {
+      const card = document.createElement('article');
+      card.className = 'transmission-card';
+      const heading = document.createElement('div');
+      heading.className = 'transmission-heading';
+      const speaker = document.createElement('strong');
+      speaker.className = 'transmission-speaker';
+      speaker.textContent = speakerLabel(item.speaker);
+      const live = document.createElement('span');
+      live.className = 'transmission-live';
+      live.textContent = 'AO VIVO';
+      heading.append(speaker, live);
+      const sourceId = numberText(item.speaker && item.speaker.dmr_id);
+      const speakerDetail = document.createElement('p');
+      speakerDetail.className = 'transmission-detail';
+      speakerDetail.textContent = sourceId ? `Emissor · DMR ID ${sourceId}` : 'Emissor';
+      const ingress = document.createElement('p');
+      ingress.className = 'transmission-ingress';
+      ingress.textContent = `Entrada · ${ingressLabel(item.ingress)}`;
+      const meta = document.createElement('div');
+      meta.className = 'transmission-meta';
+      const channel = document.createElement('span');
+      channel.textContent = `TG${numberText(item.talkgroup) || '—'} · TS${numberText(item.timeslot) || '—'}`;
+      const duration = document.createElement('time');
+      duration.className = 'transmission-duration';
+      duration.setAttribute('aria-live', 'off');
+      duration.dataset.startedAt = safeText(item.started_at, 40);
+      duration.textContent = formatDuration((Date.now() - (timestampValue(item.started_at) || Date.now())) / 1000);
+      meta.append(channel, duration);
+      card.append(heading, speakerDetail, ingress, meta);
+      return card;
+    });
+    container.replaceChildren(...cards);
+  }
+
   function renderActivity(items) {
     const container = el('activityList');
-    const list = Array.isArray(items) ? items.filter((item) => item && typeof item === 'object' && Number(item.talkgroup) === 100).slice(0, MAX_ACTIVITY) : [];
+    const list = Array.isArray(items) ? items.filter((item) => item && typeof item === 'object').slice(0, MAX_ACTIVITY) : [];
     container.setAttribute('aria-busy', 'false');
     if (!list.length) {
       setEmpty(container, model.connected ? 'Nenhuma atividade recente.' : 'A atividade aparecerá quando a conexão voltar.', model.connected ? 'empty-state' : 'error-state');
       return;
     }
     const entries = list.map((item) => {
-      const kind = safeText(item.kind, 32).toLowerCase();
-      const voice = ['voice', 'transmission', 'stream_start', 'talkgroup_activity'].includes(kind);
       const row = document.createElement('li');
       row.className = 'activity-item';
-      row.dataset.kind = voice ? 'voice' : 'event';
+      row.dataset.kind = 'voice';
       const marker = document.createElement('span');
       marker.className = 'activity-marker';
       marker.setAttribute('aria-hidden', 'true');
-      marker.textContent = voice ? '◖' : '·';
+      marker.textContent = '◖';
       const copy = document.createElement('span');
       copy.className = 'activity-copy';
       const title = document.createElement('span');
       title.className = 'activity-title';
-      title.textContent = safeText(item.callsign, 24) || 'Rede Bueno DMR';
+      title.textContent = speakerLabel(item.speaker);
       const subtitle = document.createElement('span');
       subtitle.className = 'activity-subtitle';
-      subtitle.textContent = activityDescription(item);
-      copy.append(title, subtitle);
+      subtitle.textContent = `Emissor · DMR ID ${numberText(item.speaker && item.speaker.dmr_id) || '—'}`;
+      const ingress = document.createElement('span');
+      ingress.className = 'activity-ingress';
+      ingress.textContent = `Entrada · ${ingressLabel(item.ingress)}`;
+      const channel = document.createElement('span');
+      channel.className = 'activity-channel';
+      channel.textContent = `TG${numberText(item.talkgroup) || '—'} · TS${numberText(item.timeslot) || '—'} · ${formatDuration(item.duration_seconds)}`;
+      copy.append(title, subtitle, ingress, channel);
       const time = document.createElement('time');
       time.className = 'activity-time';
-      const timestamp = timestampValue(item.timestamp);
+      time.setAttribute('aria-live', 'off');
+      const timestamp = timestampValue(item.ended_at);
       if (timestamp) time.dateTime = new Date(timestamp).toISOString();
-      time.textContent = relativeTime(item.timestamp);
+      time.textContent = relativeTime(item.ended_at);
       row.append(marker, copy, time);
       return row;
     });
@@ -236,6 +296,7 @@
     setNetworkStatus(visualState, label);
     renderMetrics(snapshot);
     renderHotspots(snapshot.hotspots);
+    renderActiveTransmissions(snapshot.active_transmissions);
     renderActivity(snapshot.activity);
     renderOperators(snapshot.operators);
   }
@@ -277,7 +338,7 @@
     socket.addEventListener('message', (event) => {
       let message;
       try { message = JSON.parse(event.data); } catch { return; }
-      if (message && message.type === 'snapshot') {
+      if (message && ['snapshot', 'voice_started', 'voice_ended'].includes(message.type)) {
         try { renderSnapshot(message.data); } catch { /* Ignore malformed public frames. */ }
       }
     });
@@ -295,7 +356,11 @@
     if (!model.snapshot || document.hidden) return;
     document.querySelectorAll('#activityList time').forEach((node, index) => {
       const item = model.snapshot.activity && model.snapshot.activity[index];
-      if (item) node.textContent = relativeTime(item.timestamp);
+      if (item) node.textContent = relativeTime(item.ended_at);
+    });
+    document.querySelectorAll('.transmission-duration[data-started-at]').forEach((node) => {
+      const started = timestampValue(node.dataset.startedAt);
+      if (started) node.textContent = formatDuration((Date.now() - started) / 1000);
     });
   }
 
@@ -309,11 +374,12 @@
     connectSocket();
   });
 
-  window.setInterval(refreshRelativeTimes, 60000);
+  window.setInterval(refreshRelativeTimes, 1000);
   loadSnapshot().catch(() => {
     model.connected = false;
     setNetworkStatus('error', 'Indisponível', 'Não foi possível carregar os dados públicos.');
     renderHotspots([]);
+    renderActiveTransmissions([]);
     renderActivity([]);
     renderOperators([]);
   });

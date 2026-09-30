@@ -410,6 +410,49 @@ def _public_callsign(value):
     return value if _PUBLIC_CALLSIGN_RE.fullmatch(value) else None
 
 
+def _public_timestamp(value):
+    if not isinstance(value, (int, float)):
+        return None
+    try:
+        return datetime.fromtimestamp(value).astimezone().isoformat(timespec="seconds")
+    except (OverflowError, OSError, ValueError):
+        return None
+
+
+def _public_speaker(source_id):
+    if type(source_id) is not int or source_id <= 0:
+        return None
+    return {
+        "dmr_id": source_id,
+        "callsign": _public_callsign(state.user_db.get(source_id, "")),
+    }
+
+
+def _public_ingress(repeater_id, repeater_callsign=None, operator_rows=()):
+    if type(repeater_id) is not int or repeater_id <= 0:
+        return None
+    repeater = state.repeaters.get(repeater_id, {})
+    result = {
+        "repeater_id": repeater_id,
+        "callsign": _public_callsign(repeater_callsign or repeater.get("callsign")),
+    }
+
+    # ESSID is meaningful only for an active, allowlisted BuenoDMR operator.
+    # A nine-digit repeater ID is base_id * 100 + its two-digit ESSID.
+    base_id, essid = divmod(repeater_id, 100)
+    allowed = any(
+        row.get("active") is True
+        and row.get("base_id") == base_id
+        and type(row.get("essid_from")) is int
+        and type(row.get("essid_to")) is int
+        and row["essid_from"] <= essid <= row["essid_to"]
+        for row in operator_rows
+    )
+    if allowed:
+        result["essid"] = f"{essid:02d}"
+    return result
+
+
 def build_public_snapshot():
     """Project live dashboard internals into a small, allowlisted public DTO."""
     active_streams = [
@@ -432,6 +475,14 @@ def build_public_snapshot():
         and repeater.get("connection_type") == "hotspot"
     ]
 
+    operator_rows = []
+    store = getattr(app.state, "admin_store", None)
+    if store:
+        try:
+            operator_rows = store.list_operators()
+        except Exception as exc:
+            logger.warning("Public operator projection unavailable: %s", type(exc).__name__)
+
     hotspots = []
     for repeater_id, repeater in connected_hotspots:
         callsign = _public_callsign(repeater.get("callsign"))
@@ -443,45 +494,68 @@ def build_public_snapshot():
                 "transmitting": repeater_id in active_repeater_ids,
             })
 
-    operators = []
-    store = getattr(app.state, "admin_store", None)
-    if store:
-        try:
-            operators = [
-                {"callsign": row["callsign"]}
-                for row in store.list_operators()
-                if row.get("active") and _public_callsign(row.get("callsign"))
-            ]
-        except Exception as exc:
-            logger.warning("Public operator projection unavailable: %s", type(exc).__name__)
+    operators = [
+        {"callsign": _public_callsign(row.get("callsign"))}
+        for row in operator_rows
+        if row.get("active") and _public_callsign(row.get("callsign"))
+    ]
+
+    active_transmissions = []
+    for stream in active_streams:
+        repeater_id = stream.get("repeater_id")
+        speaker = _public_speaker(stream.get("rf_src") or stream.get("src_id"))
+        ingress = _public_ingress(repeater_id, operator_rows=operator_rows)
+        started_at = _public_timestamp(stream.get("start_time"))
+        if speaker is None or ingress is None or started_at is None:
+            continue
+        active_transmissions.append({
+            "speaker": speaker,
+            "ingress": ingress,
+            "talkgroup": stream["dst_id"],
+            "timeslot": stream["slot"],
+            "started_at": started_at,
+        })
+    active_transmissions.sort(key=lambda item: (item["started_at"], item["ingress"]["repeater_id"]))
 
     activity = []
+    seen_streams = set()
     for event in reversed(state.events):
         if len(activity) >= 20:
             break
         data = event.get("data", {})
-        if (event.get("type") != "stream_start" or data.get("is_assumed")
+        if (event.get("type") != "stream_end" or data.get("is_assumed")
                 or data.get("is_data") or data.get("call_type") != "group"
                 or data.get("slot") != 2 or data.get("dst_id") != 100):
             continue
-        source_id = data.get("src_id")
-        if not isinstance(source_id, int):
+        repeater_id = data.get("repeater_id")
+        stream_id = data.get("stream_id")
+        if type(repeater_id) is not int or not isinstance(stream_id, str):
             continue
-        callsign = _public_callsign(state.user_db.get(source_id, ""))
-        timestamp = event.get("timestamp")
-        if not isinstance(timestamp, (int, float)):
+        speaker = _public_speaker(data.get("rf_src") or data.get("src_id"))
+        ingress = _public_ingress(repeater_id, operator_rows=operator_rows)
+        ended_at = _public_timestamp(event.get("timestamp"))
+        duration = data.get("duration")
+        if (speaker is None or ingress is None or ended_at is None
+                or type(duration) not in (int, float) or duration < 0):
             continue
-        try:
-            stamp = datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")
-        except (OverflowError, OSError, ValueError):
+        ended_epoch = event["timestamp"]
+        identity = (repeater_id, data.get("slot"), stream_id,
+                    round(ended_epoch - duration, 3))
+        if identity in seen_streams:
             continue
-        if callsign:
-            activity.append({
-                "callsign": callsign,
-                "talkgroup": 100,
-                "kind": "voice",
-                "timestamp": stamp,
-            })
+        seen_streams.add(identity)
+        started_at = _public_timestamp(ended_epoch - duration)
+        if started_at is None:
+            continue
+        activity.append({
+            "speaker": speaker,
+            "ingress": ingress,
+            "talkgroup": data["dst_id"],
+            "timeslot": data["slot"],
+            "duration_seconds": round(duration, 2),
+            "started_at": started_at,
+            "ended_at": ended_at,
+        })
 
     return {
         "state": {
@@ -498,6 +572,7 @@ def build_public_snapshot():
             "operators_authorized": len(operators),
         },
         "hotspots": hotspots,
+        "active_transmissions": active_transmissions,
         "activity": activity,
         "operators": operators,
     }
@@ -530,10 +605,12 @@ def build_radio_access_observation():
     return {"hblink_connected": state.hblink_connected, "clients": clients[:100]}
 
 
-async def _broadcast_public_snapshot():
+async def _broadcast_public_snapshot(message_type="snapshot"):
     if not state.public_websocket_clients:
         return
-    message = json.dumps({"type": "snapshot", "data": build_public_snapshot()})
+    if message_type not in {"snapshot", "voice_started", "voice_ended"}:
+        message_type = "snapshot"
+    message = json.dumps({"type": message_type, "data": build_public_snapshot()})
     disconnected = set()
     for client in tuple(state.public_websocket_clients):
         try:
@@ -1201,7 +1278,24 @@ class EventReceiver:
                 except Exception:
                     disconnected.add(client)
             state.websocket_clients -= disconnected
-        await _broadcast_public_snapshot()
+        event_type = event.get("type")
+        data = event.get("data", {})
+        public_voice_event = (
+            event_type in {"stream_start", "stream_end"}
+            and data.get("call_type") == "group"
+            and data.get("slot") == 2
+            and data.get("dst_id") == 100
+            and not data.get("is_assumed")
+            and not data.get("is_data")
+            and type(data.get("repeater_id")) is int
+        )
+        if event_type != "stream_update":
+            message_type = (
+                "voice_started" if event_type == "stream_start" and public_voice_event
+                else "voice_ended" if event_type == "stream_end" and public_voice_event
+                else "snapshot"
+            )
+            await _broadcast_public_snapshot(message_type)
 
 
 # REST API endpoints

@@ -6,8 +6,8 @@
   <meta name="theme-color" content="#08111d">
   <meta name="description" content="Acompanhe o status público da rede Bueno DMR.">
   <title>Bueno DMR — Rede digital</title>
-  <link rel="stylesheet" href="/static/dashboard.css?v=2">
-  <script src="/static/dashboard.js?v=2" defer></script>
+  <link rel="stylesheet" href="/static/dashboard.css?v=3">
+  <script src="/static/dashboard.js?v=3" defer></script>
 </head>
 <body>
   <a class="skip-link" href="#main">Pular para o conteúdo</a>
@@ -93,10 +93,15 @@
             <div><p class="eyebrow">TEMPO REAL</p><h2 id="activity-title">Atividade</h2></div>
             <span class="activity-wave" aria-hidden="true"><i></i><i></i><i></i><i></i><i></i></span>
           </div>
+          <h3 class="activity-subheading">No ar agora</h3>
+          <div class="active-transmission-list" id="activeTransmissionList" aria-live="polite" aria-busy="true">
+            <p class="loading-state">Aguardando atividade…</p>
+          </div>
+          <h3 class="activity-subheading recent-heading">Chamadas recentes</h3>
           <ol class="activity-list" id="activityList" aria-live="polite" aria-relevant="additions text" aria-busy="true">
             <li class="loading-state">Aguardando atividade…</li>
           </ol>
-          <p class="section-footnote" id="activityFootnote">Eventos públicos recentes da TG100.</p>
+          <p class="section-footnote" id="activityFootnote">Emissor e ponto de entrada são identificados separadamente.</p>
         </section>
       </div>
 
