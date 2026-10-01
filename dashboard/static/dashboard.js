@@ -2,7 +2,7 @@
   'use strict';
 
   const SNAPSHOT_URL = '/api/public/snapshot';
-  const MAX_ACTIVITY = 12;
+  const MAX_ACTIVITY = 10;
   const MAX_OPERATORS = 24;
   const MAX_HOTSPOTS = 36;
   const model = { snapshot: null, activity: [], socket: null, reconnectTimer: null, retryDelay: 2000, connected: false, connectionInterrupted: false };
@@ -86,7 +86,15 @@
   function formatDuration(value) {
     const seconds = Math.max(0, Math.floor(Number(value) || 0));
     const minutes = Math.floor(seconds / 60);
-    return minutes ? `${minutes}:${String(seconds % 60).padStart(2, '0')}` : `${seconds} s`;
+    return `${String(minutes).padStart(2, '0')}:${String(seconds % 60).padStart(2, '0')}`;
+  }
+
+  function speakerProfile(speaker) {
+    const name = safeText(speaker && speaker.name, 80);
+    const city = safeText(speaker && speaker.city, 60);
+    const region = safeText(speaker && speaker.region, 40);
+    const location = [city, region].filter(Boolean).join(' / ');
+    return [name, location].filter(Boolean).join(' · ');
   }
 
   function speakerLabel(speaker) {
@@ -99,7 +107,7 @@
     const callsign = safeText(ingress && ingress.callsign, 24);
     const repeaterId = numberText(ingress && ingress.repeater_id);
     const essid = safeText(ingress && ingress.essid, 2);
-    return [callsign || 'Ponto de acesso', repeaterId ? `ID ${repeaterId}` : '', essid ? `ESSID ${essid}` : '']
+    return [callsign || 'Acesso DMR', repeaterId ? `ID ${repeaterId}` : '', essid ? `ESSID ${essid}` : '']
       .filter(Boolean).join(' · ');
   }
 
@@ -185,6 +193,10 @@
       const speakerDetail = document.createElement('p');
       speakerDetail.className = 'transmission-detail';
       speakerDetail.textContent = sourceId ? `Emissor · DMR ID ${sourceId}` : 'Emissor';
+      const profile = speakerProfile(item.speaker);
+      const profileDetail = document.createElement('p');
+      profileDetail.className = 'transmission-profile';
+      profileDetail.textContent = profile;
       const ingress = document.createElement('p');
       ingress.className = 'transmission-ingress';
       ingress.textContent = `Entrada · ${ingressLabel(item.ingress)}`;
@@ -198,7 +210,9 @@
       duration.dataset.startedAt = safeText(item.started_at, 40);
       duration.textContent = formatDuration((Date.now() - (timestampValue(item.started_at) || Date.now())) / 1000);
       meta.append(channel, duration);
-      card.append(heading, speakerDetail, ingress, meta);
+      card.append(heading, speakerDetail);
+      if (profile) card.append(profileDetail);
+      card.append(ingress, meta);
       return card;
     });
     container.replaceChildren(...cards);
@@ -228,13 +242,19 @@
       const subtitle = document.createElement('span');
       subtitle.className = 'activity-subtitle';
       subtitle.textContent = `Emissor · DMR ID ${numberText(item.speaker && item.speaker.dmr_id) || '—'}`;
+      const profile = speakerProfile(item.speaker);
+      const profileDetail = document.createElement('span');
+      profileDetail.className = 'activity-profile';
+      profileDetail.textContent = profile;
       const ingress = document.createElement('span');
       ingress.className = 'activity-ingress';
       ingress.textContent = `Entrada · ${ingressLabel(item.ingress)}`;
       const channel = document.createElement('span');
       channel.className = 'activity-channel';
       channel.textContent = `TG${numberText(item.talkgroup) || '—'} · TS${numberText(item.timeslot) || '—'} · ${formatDuration(item.duration_seconds)}`;
-      copy.append(title, subtitle, ingress, channel);
+      copy.append(title, subtitle);
+      if (profile) copy.append(profileDetail);
+      copy.append(ingress, channel);
       const time = document.createElement('time');
       time.className = 'activity-time';
       time.setAttribute('aria-live', 'off');
@@ -347,6 +367,7 @@
       model.connected = false;
       model.connectionInterrupted = true;
       setNetworkStatus(model.snapshot ? 'offline' : 'error', model.snapshot ? 'Reconectando' : 'Indisponível', 'Conexão ao vivo perdida. Tentando reconectar.');
+      renderActiveTransmissions([]);
       scheduleReconnect();
     });
     socket.addEventListener('error', () => socket.close());

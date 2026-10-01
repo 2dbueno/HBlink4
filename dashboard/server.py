@@ -11,6 +11,7 @@ import socket
 import os
 import ipaddress
 import re
+import unicodedata
 import sys
 import atexit
 from datetime import datetime, date, timedelta
@@ -410,6 +411,19 @@ def _public_callsign(value):
     return value if _PUBLIC_CALLSIGN_RE.fullmatch(value) else None
 
 
+def _public_directory_text(value, limit):
+    """Allow short human-readable directory fields in the public view."""
+    if not isinstance(value, str):
+        return None
+    cleaned = " ".join(value.split())[:limit]
+    if not cleaned or any(
+        unicodedata.category(char)[0] not in {"L", "M"}
+        and char not in " .'-" for char in cleaned
+    ):
+        return None
+    return cleaned
+
+
 def _public_timestamp(value):
     if not isinstance(value, (int, float)):
         return None
@@ -422,10 +436,18 @@ def _public_timestamp(value):
 def _public_speaker(source_id):
     if type(source_id) is not int or source_id <= 0:
         return None
-    return {
+    speaker = {
         "dmr_id": source_id,
         "callsign": _public_callsign(state.user_db.get(source_id, "")),
     }
+    profile_getter = getattr(state.user_db, "get_public_profile", None)
+    profile = profile_getter(source_id) if callable(profile_getter) else {}
+    if isinstance(profile, dict):
+        for key, limit in (("name", 80), ("city", 60), ("region", 40)):
+            value = _public_directory_text(profile.get(key), limit)
+            if value:
+                speaker[key] = value
+    return speaker
 
 
 def _public_ingress(repeater_id, repeater_callsign=None, operator_rows=()):
@@ -520,7 +542,7 @@ def build_public_snapshot():
     activity = []
     seen_streams = set()
     for event in reversed(state.events):
-        if len(activity) >= 20:
+        if len(activity) >= 10:
             break
         data = event.get("data", {})
         if (event.get("type") != "stream_end" or data.get("is_assumed")
